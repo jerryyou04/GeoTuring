@@ -1,26 +1,53 @@
-# GeoTuring Backend
+# GeoTuring
 
-Minimal Node.js Express + Socket.IO backend ready for Railway deployment.
+Minimal full-stack GeoTuring starter with a Railway-ready backend and frontend.
 
-## Setup
+## Project Structure
+
+```text
+backend/
+  server.js
+  package.json
+  .env.example
+
+frontend/
+  src/
+  package.json
+  .env.example
+```
+
+## Backend Setup
 
 ```bash
+cd backend
 npm install
 cp .env.example .env
 npm run dev
 ```
 
-The server runs on `http://localhost:3000` by default.
+The backend runs on `http://localhost:3000` by default.
 
-## Scripts
+## Frontend Setup
 
-- `npm start` - run the production server
-- `npm run dev` - run the server with nodemon
+```bash
+cd frontend
+npm install
+cp .env.example .env
+npm run dev
+```
+
+The frontend runs on `http://localhost:5173` by default.
 
 ## Environment Variables
 
+Backend:
+
 - `PORT` - server port. Railway provides this automatically in production.
 - `FRONTEND_URL` - allowed CORS origin, such as `http://localhost:5173` for local development or your deployed frontend URL.
+
+Frontend:
+
+- `VITE_API_URL` - backend API URL, such as `http://localhost:3000` locally or your deployed backend URL.
 
 ## Endpoints
 
@@ -29,4 +56,9 @@ The server runs on `http://localhost:3000` by default.
 
 ## Railway
 
-Railway will run `npm start` and provide `PORT` automatically. Set `FRONTEND_URL` in Railway once a frontend is deployed.
+Create two Railway services from this repo:
+
+- Backend service root directory: `backend`
+- Frontend service root directory: `frontend`
+
+Set `FRONTEND_URL` on the backend service to your Railway frontend URL. Set `VITE_API_URL` on the frontend service to your Railway backend URL.
