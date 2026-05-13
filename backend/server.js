@@ -167,9 +167,9 @@ function scoreGuess(session, guess) {
   const actualType = session.participant.kind;
   const identityGuess = guess.identityGuess === "Human" ? "Human" : "AI";
   const correctIdentity = identityGuess === actualType;
-  const identityScore = correctIdentity ? 100 : 0;
-  let locationScore = 0;
-  let modelFamilyScore = 0;
+  const readScore = correctIdentity ? 1 : 0;
+  let roundScore = 0;
+  let roundType = actualType === "Human" ? "location" : "modelFamily";
   let distanceKm = null;
 
   if (
@@ -184,7 +184,7 @@ function scoreGuess(session, guess) {
       session.participant.lat,
       session.participant.lng,
     );
-    locationScore = Math.max(0, Math.round(500 * (1 - distanceKm / 10000)));
+    roundScore = Math.max(0, Math.round(100 * (1 - distanceKm / 10000)));
   }
 
   if (
@@ -192,19 +192,22 @@ function scoreGuess(session, guess) {
     identityGuess === "AI" &&
     guess.modelFamilyGuess === session.participant.modelFamily
   ) {
-    modelFamilyScore = 300;
+    roundScore = 100;
   }
-
-  const total = identityScore + locationScore + modelFamilyScore;
 
   return {
     sessionId: session.id,
     correctIdentity,
     score: {
-      total,
-      identity: identityScore,
-      location: locationScore,
-      modelFamily: modelFamilyScore,
+      read: {
+        earned: readScore,
+        possible: 1,
+      },
+      round: {
+        earned: roundScore,
+        possible: 100,
+        type: roundType,
+      },
     },
     distanceKm: distanceKm === null ? null : Math.round(distanceKm),
     guess: {
@@ -238,13 +241,13 @@ function buildExplanation(participant, correctIdentity, distanceKm) {
   if (participant.kind === "Human") {
     const locationText =
       distanceKm === null
-        ? "No location score was awarded because you did not place a human-location guess."
-        : `Your pin was ${Math.round(distanceKm)} km from ${participant.region}, ${participant.country}.`;
+        ? "Your round score is 0/100 because you did not make a human-location guess."
+        : `Your location score is based on a pin ${Math.round(distanceKm)} km from ${participant.region}, ${participant.country}.`;
 
     return `${correctIdentity ? "You called the identity correctly." : "The identity read was off."} ${locationText}`;
   }
 
-  return `${correctIdentity ? "You spotted the AI." : "The identity read was off."} The hidden model family was ${participant.modelFamily}.`;
+  return `${correctIdentity ? "You spotted the AI." : "The identity read was off."} The model-family round score is 100/100 only for the exact family: ${participant.modelFamily}.`;
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {

@@ -35,10 +35,15 @@ interface QueueStatusPayload {
 interface ResultPayload {
   correctIdentity: boolean;
   score: {
-    total: number;
-    identity: number;
-    location: number;
-    modelFamily: number;
+    read: {
+      earned: number;
+      possible: number;
+    };
+    round: {
+      earned: number;
+      possible: number;
+      type: "location" | "modelFamily";
+    };
   };
   distanceKm: number | null;
   guess: {
@@ -311,7 +316,7 @@ function App() {
     <main className="appShell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">GeoTuring</p>
+          <p className="eyebrow">GeoTuring (Preview)</p>
           <h1>Read the room. Then read the world.</h1>
         </div>
         <StatusPill value={connection} />
@@ -382,16 +387,16 @@ function Landing({ onStart }: { onStart: () => void }) {
       </div>
       <div className="scorePreview" aria-label="Scoring preview">
         <div>
-          <span>Identity</span>
-          <strong>+100</strong>
+          <span>Read score</span>
+          <strong>0/1 or 1/1</strong>
         </div>
         <div>
-          <span>Human location</span>
-          <strong>+500</strong>
+          <span>Human round</span>
+          <strong>0-100</strong>
         </div>
         <div>
-          <span>AI family</span>
-          <strong>+300</strong>
+          <span>AI round</span>
+          <strong>0 or 100</strong>
         </div>
       </div>
     </section>
@@ -684,19 +689,39 @@ function Reveal({ result, onRestart }: { result: ResultPayload; onRestart: () =>
     result.actual.participantType === "Human"
       ? `${result.actual.region}, ${result.actual.country}`
       : `${result.actual.modelFamily}`;
+  const roundLabel = result.score.round.type === "location" ? "Location round" : "AI family round";
+  const roundDetail =
+    result.score.round.type === "location"
+      ? result.distanceKm === null
+        ? "No valid location pin"
+        : `${result.distanceKm} km away`
+      : `You guessed ${result.guess.modelFamilyGuess || "no family"}`;
 
   return (
     <section className="gamePanel reveal">
       <p className="roundLabel">Reveal</p>
       <div className="revealTop">
         <h2>{result.correctIdentity ? "Correct read." : "Wrong read."}</h2>
-        <div className="scoreBadge">{result.score.total}</div>
+        <div className="scoreBadges">
+          <div className="scoreBadge">
+            <span>Read</span>
+            <strong>
+              {result.score.read.earned}/{result.score.read.possible}
+            </strong>
+          </div>
+          <div className="scoreBadge">
+            <span>Round</span>
+            <strong>
+              {result.score.round.earned}/{result.score.round.possible}
+            </strong>
+          </div>
+        </div>
       </div>
       <div className="revealGrid">
         <ResultStat label="Actual" value={`${result.actual.participantType}: ${actual}`} />
-        <ResultStat label="Identity" value={`+${result.score.identity}`} />
-        <ResultStat label="Location" value={`+${result.score.location}`} />
-        <ResultStat label="Model family" value={`+${result.score.modelFamily}`} />
+        <ResultStat label="Your read" value={result.guess.identityGuess} />
+        <ResultStat label={roundLabel} value={`${result.score.round.earned}/${result.score.round.possible}`} />
+        <ResultStat label="Round detail" value={roundDetail} />
       </div>
       <p className="explanation">{result.explanation}</p>
       <button className="primaryButton" onClick={onRestart}>

@@ -66,9 +66,14 @@ local development.
 
 ## Scoring
 
-- Correct Human/AI identity guess: `+100`
-- Human location guess: up to `+500` based on haversine distance
-- Correct AI model family: `+300`
+Each round returns two scores:
+
+- Read score: `0/1` or `1/1` for correctly identifying Human vs AI.
+- Round score: `0/100` through `100/100`.
+
+For human participants, the round score is based on haversine distance from the
+actual location. For AI participants, the round score is `100/100` for the exact
+model family and `0/100` otherwise.
 
 ## Railway Deployment
 
