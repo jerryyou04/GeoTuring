@@ -77,59 +77,26 @@ interface PersistentScore {
   aiPossible: number;
 }
 
-interface RoughLocation {
-  lat: number;
-  lng: number;
+interface IpLocation {
   country: string;
   region: string;
-  radiusKm: number;
-  source: "browser" | "manual";
+  city: string;
+  source: "ip";
   updatedAt: number;
 }
 
-interface CountryReference {
-  code: string;
-  country: string;
-  region: string;
-  lat: number;
-  lng: number;
-}
+const API_URL = resolveServiceUrl(
+  import.meta.env.NEXT_PUBLIC_API_URL || import.meta.env.VITE_API_URL,
+);
 
-const API_URL =
-  import.meta.env.NEXT_PUBLIC_API_URL ||
-  import.meta.env.VITE_API_URL ||
-  "http://localhost:3000";
-
-const SOCKET_URL =
-  import.meta.env.NEXT_PUBLIC_SOCKET_URL ||
-  import.meta.env.VITE_SOCKET_URL ||
-  API_URL;
+const SOCKET_URL = resolveServiceUrl(
+  import.meta.env.NEXT_PUBLIC_SOCKET_URL || import.meta.env.VITE_SOCKET_URL || API_URL,
+);
 
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
-const COUNTRY_REFERENCES: CountryReference[] = [
-  { code: "AR", country: "Argentina", region: "South America", lat: -34.6, lng: -58.4 },
-  { code: "AU", country: "Australia", region: "Oceania", lat: -33.9, lng: 151.2 },
-  { code: "BR", country: "Brazil", region: "South America", lat: -23.6, lng: -46.6 },
-  { code: "CA", country: "Canada", region: "North America", lat: 43.7, lng: -79.4 },
-  { code: "CO", country: "Colombia", region: "South America", lat: 4.7, lng: -74.1 },
-  { code: "DE", country: "Germany", region: "Europe", lat: 52.5, lng: 13.4 },
-  { code: "ES", country: "Spain", region: "Europe", lat: 40.4, lng: -3.7 },
-  { code: "FR", country: "France", region: "Europe", lat: 48.9, lng: 2.4 },
-  { code: "GB", country: "United Kingdom", region: "Europe", lat: 51.5, lng: -0.1 },
-  { code: "IN", country: "India", region: "South Asia", lat: 28.6, lng: 77.2 },
-  { code: "IT", country: "Italy", region: "Europe", lat: 41.9, lng: 12.5 },
-  { code: "JP", country: "Japan", region: "East Asia", lat: 35.7, lng: 139.7 },
-  { code: "KR", country: "South Korea", region: "East Asia", lat: 37.6, lng: 127.0 },
-  { code: "MX", country: "Mexico", region: "North America", lat: 19.4, lng: -99.1 },
-  { code: "NL", country: "Netherlands", region: "Europe", lat: 52.4, lng: 4.9 },
-  { code: "PL", country: "Poland", region: "Europe", lat: 52.2, lng: 21.0 },
-  { code: "SE", country: "Sweden", region: "Europe", lat: 59.3, lng: 18.1 },
-  { code: "TR", country: "Turkey", region: "West Asia", lat: 41.0, lng: 29.0 },
-  { code: "US", country: "United States", region: "North America", lat: 39.1, lng: -77.0 },
-  { code: "ZA", country: "South Africa", region: "Southern Africa", lat: -26.2, lng: 28.0 },
-];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
-const LOCATION_STORAGE_KEY = "geoturing:rough-location:v1";
+const LOCATION_CONSENT_STORAGE_KEY = "geoturing:location-consent:v1";
+const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
   readEarned: 0,
   readPossible: 0,
@@ -169,7 +136,8 @@ function App() {
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
   const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
   const [persistentScore, setPersistentScore] = useState<PersistentScore>(() => loadPersistentScore());
-  const [roughLocation, setRoughLocation] = useState<RoughLocation | null>(() => loadRoughLocation());
+  const [locationConsent, setLocationConsent] = useState(() => loadLocationConsent());
+  const [ipLocation, setIpLocation] = useState<IpLocation | null>(() => loadIpLocation());
   const [locationStatus, setLocationStatus] = useState("idle");
 
   const secondsLeft = useMemo(() => {
@@ -205,6 +173,12 @@ function App() {
   }, [chatEndsAt, phase, secondsLeft]);
 
   useEffect(() => {
+    if (locationConsent && !ipLocation && locationStatus === "idle") {
+      fetchIpLocation();
+    }
+  }, [locationConsent, ipLocation, locationStatus]);
+
+  useEffect(() => {
     return () => {
       clearQueueUiTimers();
       socketRef.current?.disconnect();
@@ -217,7 +191,7 @@ function App() {
   }
 
   function startMatchmaking() {
-    if (!roughLocation) {
+    if (!locationConsent) {
       setLocationStatus("required");
       return;
     }
@@ -405,58 +379,45 @@ function App() {
     });
   }
 
-  function requestRoughLocation() {
-    if (!("geolocation" in navigator)) {
-      setLocationStatus("unsupported");
+  function setLocationAgreement(agreed: boolean) {
+    setLocationConsent(agreed);
+    saveLocationConsent(agreed);
+
+    if (!agreed) {
+      setIpLocation(null);
+      removeIpLocation();
+      setLocationStatus("idle");
       return;
     }
 
-    setLocationStatus("requesting");
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const next = toRoughLocation(position.coords);
-
-        setRoughLocation(next);
-        saveRoughLocation(next);
-        setLocationStatus("ready");
-      },
-      () => {
-        setLocationStatus("blocked");
-      },
-      {
-        enableHighAccuracy: false,
-        maximumAge: 10 * 60 * 1000,
-        timeout: 8000,
-      },
-    );
+    fetchIpLocation();
   }
 
-  function clearRoughLocation() {
-    setRoughLocation(null);
-    setLocationStatus("idle");
-    removeRoughLocation();
-  }
+  async function fetchIpLocation() {
+    setLocationStatus("checking");
 
-  function setManualCountry(countryCode: string) {
-    const reference = COUNTRY_REFERENCES.find((country) => country.code === countryCode);
+    try {
+      const response = await fetch("https://ipapi.co/json/");
 
-    if (!reference) {
-      return;
+      if (!response.ok) {
+        throw new Error("IP location lookup failed");
+      }
+
+      const data = await response.json();
+      const next: IpLocation = {
+        country: String(data.country_name || data.country || "Unknown"),
+        region: String(data.region || data.region_code || ""),
+        city: String(data.city || ""),
+        source: "ip",
+        updatedAt: Date.now(),
+      };
+
+      setIpLocation(next);
+      saveIpLocation(next);
+      setLocationStatus("ready");
+    } catch {
+      setLocationStatus("unavailable");
     }
-
-    const next: RoughLocation = {
-      lat: reference.lat,
-      lng: reference.lng,
-      country: reference.country,
-      region: reference.region,
-      radiusKm: 250,
-      source: "manual",
-      updatedAt: Date.now(),
-    };
-
-    setRoughLocation(next);
-    saveRoughLocation(next);
-    setLocationStatus("ready");
   }
 
   return (
@@ -472,12 +433,11 @@ function App() {
       {phase === "landing" && (
         <Landing
           locationStatus={locationStatus}
-          onClearLocation={clearRoughLocation}
-          onManualCountry={setManualCountry}
-          onRequestLocation={requestRoughLocation}
+          locationConsent={locationConsent}
+          ipLocation={ipLocation}
+          onLocationAgreement={setLocationAgreement}
           onStart={startMatchmaking}
           persistentScore={persistentScore}
-          roughLocation={roughLocation}
         />
       )}
       {phase === "matching" && (
@@ -528,21 +488,19 @@ function StatusPill({ value }: { value: string }) {
 }
 
 function Landing({
+  ipLocation,
+  locationConsent,
   locationStatus,
-  onClearLocation,
-  onManualCountry,
-  onRequestLocation,
+  onLocationAgreement,
   onStart,
   persistentScore,
-  roughLocation,
 }: {
+  ipLocation: IpLocation | null;
+  locationConsent: boolean;
   locationStatus: string;
-  onClearLocation: () => void;
-  onManualCountry: (countryCode: string) => void;
-  onRequestLocation: () => void;
+  onLocationAgreement: (agreed: boolean) => void;
   onStart: () => void;
   persistentScore: PersistentScore;
-  roughLocation: RoughLocation | null;
 }) {
   return (
     <section className="heroPanel">
@@ -554,17 +512,15 @@ function Landing({
           make the second guess: place their location on the world map or call
           the model family.
         </p>
-        <button className="primaryButton" onClick={onStart}>
-          {roughLocation ? "Start matchmaking" : "Set rough location to play"}
+        <button className="primaryButton" disabled={!locationConsent} onClick={onStart}>
+          Start matchmaking
         </button>
       </div>
       <div className="scoreSidebar">
-        <RoughLocationCard
-          countries={COUNTRY_REFERENCES}
-          location={roughLocation}
-          onClear={onClearLocation}
-          onManualCountry={onManualCountry}
-          onRequest={onRequestLocation}
+        <IpLocationConsentCard
+          agreed={locationConsent}
+          location={ipLocation}
+          onAgreement={onLocationAgreement}
           status={locationStatus}
         />
         <PersistentScoreboard score={persistentScore} />
@@ -587,53 +543,34 @@ function Landing({
   );
 }
 
-function RoughLocationCard({
-  countries,
+function IpLocationConsentCard({
+  agreed,
   location,
-  onClear,
-  onManualCountry,
-  onRequest,
+  onAgreement,
   status,
 }: {
-  countries: CountryReference[];
-  location: RoughLocation | null;
-  onClear: () => void;
-  onManualCountry: (countryCode: string) => void;
-  onRequest: () => void;
+  agreed: boolean;
+  location: IpLocation | null;
+  onAgreement: (agreed: boolean) => void;
   status: string;
 }) {
-  const statusText = getLocationStatusText(status, location);
+  const statusText = getIpLocationStatusText(status, agreed, location);
 
   return (
     <aside className="locationCard" aria-label="Rough location">
       <div>
-        <p className="roundLabel">Rough location</p>
-        <strong>{location ? location.country : "Required"}</strong>
+        <p className="roundLabel">Rough location consent</p>
+        <strong>{location ? location.country : agreed ? "Checking IP" : "Required"}</strong>
         <span>{statusText}</span>
       </div>
-      <div className="locationActions">
-        <button className="secondaryButton" disabled={status === "requesting"} onClick={onRequest} type="button">
-          {location ? "Update" : status === "requesting" ? "Locating..." : "Use rough location"}
-        </button>
-        {location && (
-          <button className="textButton" onClick={onClear} type="button">
-            Clear
-          </button>
-        )}
-      </div>
-      <select
-        aria-label="Set country manually"
-        className="countrySelect"
-        onChange={(event) => onManualCountry(event.target.value)}
-        value={location ? countries.find((country) => country.country === location.country)?.code || "" : ""}
-      >
-        <option value="">Choose country manually</option>
-        {countries.map((country) => (
-          <option key={country.code} value={country.code}>
-            {country.country}
-          </option>
-        ))}
-      </select>
+      <label className="consentCheck">
+        <input
+          checked={agreed}
+          onChange={(event) => onAgreement(event.target.checked)}
+          type="checkbox"
+        />
+        <span>I agree to a rough IP-based location check while playing.</span>
+      </label>
     </aside>
   );
 }
@@ -1011,65 +948,62 @@ function formatSeconds(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function getLocationStatusText(status: string, location: RoughLocation | null) {
+function resolveServiceUrl(configuredUrl?: string) {
+  const fallbackUrl =
+    typeof window !== "undefined" && isProductionHost(window.location.hostname)
+      ? "https://api.geoturing.com"
+      : "http://localhost:3000";
+  const value = configuredUrl || fallbackUrl;
+
+  if (typeof window === "undefined") {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    const isLocal =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "::1";
+
+    if (window.location.protocol === "https:" && url.protocol === "http:" && !isLocal) {
+      url.protocol = "https:";
+    }
+
+    if (window.location.protocol === "https:" && isProductionHost(window.location.hostname) && isLocal) {
+      return "https://api.geoturing.com";
+    }
+
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return fallbackUrl;
+  }
+}
+
+function isProductionHost(hostname: string) {
+  return hostname === "geoturing.com" || hostname === "www.geoturing.com";
+}
+
+function getIpLocationStatusText(status: string, agreed: boolean, location: IpLocation | null) {
   if (location) {
-    return `${location.region}. Approximate area within ${location.radiusKm} km.`;
+    const place = [location.city, location.region].filter(Boolean).join(", ");
+
+    return place ? `${place}. Estimated from your IP.` : "Estimated from your IP.";
   }
 
-  if (status === "requesting") {
-    return "Waiting for browser permission.";
+  if (!agreed) {
+    return "Required so another player can guess your rough whereabouts.";
   }
 
-  if (status === "blocked") {
-    return "Location permission was not granted.";
+  if (status === "checking") {
+    return "Checking your rough IP location.";
   }
 
-  if (status === "unsupported") {
-    return "Location is unavailable in this browser.";
+  if (status === "unavailable") {
+    return "IP lookup failed. You can still queue after agreeing.";
   }
 
-  if (status === "required") {
-    return "Set a rough country before entering queue.";
-  }
-
-  return "Needed so another player can guess your country.";
-}
-
-function toRoughLocation(coords: GeolocationCoordinates): RoughLocation {
-  const accuracyKm = Number.isFinite(coords.accuracy) ? coords.accuracy / 1000 : 0;
-  const lat = roundToStep(coords.latitude, 0.5);
-  const lng = roundToStep(coords.longitude, 0.5);
-  const country = resolveCountry(lat, lng);
-
-  return {
-    lat,
-    lng,
-    country: country.country,
-    region: country.region,
-    radiusKm: Math.max(50, Math.ceil(accuracyKm / 10) * 10),
-    source: "browser",
-    updatedAt: Date.now(),
-  };
-}
-
-function roundToStep(value: number, step: number) {
-  return Math.round(value / step) * step;
-}
-
-function resolveCountry(lat: number, lng: number) {
-  return COUNTRY_REFERENCES.reduce((nearest, country) => {
-    const nearestDistance = roughDistance(nearest.lat, nearest.lng, lat, lng);
-    const countryDistance = roughDistance(country.lat, country.lng, lat, lng);
-
-    return countryDistance < nearestDistance ? country : nearest;
-  }, COUNTRY_REFERENCES[0]);
-}
-
-function roughDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const latDistance = lat1 - lat2;
-  const lngDistance = (lng1 - lng2) * Math.cos((lat2 * Math.PI) / 180);
-
-  return latDistance * latDistance + lngDistance * lngDistance;
+  return "Location check will run from your network/IP.";
 }
 
 function loadPersistentScore(): PersistentScore {
@@ -1107,37 +1041,46 @@ function savePersistentScore(score: PersistentScore) {
   }
 }
 
-function loadRoughLocation(): RoughLocation | null {
+function loadLocationConsent() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.localStorage.getItem(LOCATION_CONSENT_STORAGE_KEY) === "true";
+}
+
+function saveLocationConsent(agreed: boolean) {
+  try {
+    window.localStorage.setItem(LOCATION_CONSENT_STORAGE_KEY, String(agreed));
+  } catch {
+    // The current checkbox state still works if storage is unavailable.
+  }
+}
+
+function loadIpLocation(): IpLocation | null {
   if (typeof window === "undefined") {
     return null;
   }
 
   try {
-    const raw = window.localStorage.getItem(LOCATION_STORAGE_KEY);
+    const raw = window.localStorage.getItem(IP_LOCATION_STORAGE_KEY);
 
     if (!raw) {
       return null;
     }
 
-    const parsed = JSON.parse(raw) as Partial<RoughLocation>;
-    const lat = typeof parsed.lat === "number" && Number.isFinite(parsed.lat) ? parsed.lat : null;
-    const lng = typeof parsed.lng === "number" && Number.isFinite(parsed.lng) ? parsed.lng : null;
+    const parsed = JSON.parse(raw) as Partial<IpLocation>;
+    const country = typeof parsed.country === "string" ? parsed.country : "";
 
-    if (lat === null || lng === null) {
+    if (!country) {
       return null;
     }
 
-    const resolved = resolveCountry(lat, lng);
-    const country = typeof parsed.country === "string" ? parsed.country : resolved.country;
-    const region = typeof parsed.region === "string" ? parsed.region : resolved.region;
-
     return {
-      lat,
-      lng,
       country,
-      region,
-      radiusKm: toScoreNumber(parsed.radiusKm) || 50,
-      source: parsed.source === "manual" ? "manual" : "browser",
+      region: typeof parsed.region === "string" ? parsed.region : "",
+      city: typeof parsed.city === "string" ? parsed.city : "",
+      source: "ip",
       updatedAt: toScoreNumber(parsed.updatedAt),
     };
   } catch {
@@ -1145,17 +1088,17 @@ function loadRoughLocation(): RoughLocation | null {
   }
 }
 
-function saveRoughLocation(location: RoughLocation) {
+function saveIpLocation(location: IpLocation) {
   try {
-    window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(location));
+    window.localStorage.setItem(IP_LOCATION_STORAGE_KEY, JSON.stringify(location));
   } catch {
     // Location still appears for the current session if storage is unavailable.
   }
 }
 
-function removeRoughLocation() {
+function removeIpLocation() {
   try {
-    window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+    window.localStorage.removeItem(IP_LOCATION_STORAGE_KEY);
   } catch {
     // Nothing else to do if storage is unavailable.
   }
