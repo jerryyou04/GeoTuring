@@ -77,6 +77,14 @@ interface PersistentScore {
   aiPossible: number;
 }
 
+interface RoughLocation {
+  lat: number;
+  lng: number;
+  radiusKm: number;
+  source: "browser";
+  updatedAt: number;
+}
+
 const API_URL =
   import.meta.env.NEXT_PUBLIC_API_URL ||
   import.meta.env.VITE_API_URL ||
@@ -89,6 +97,7 @@ const SOCKET_URL =
 
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
+const LOCATION_STORAGE_KEY = "geoturing:rough-location:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
   readEarned: 0,
   readPossible: 0,
@@ -128,6 +137,8 @@ function App() {
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
   const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
   const [persistentScore, setPersistentScore] = useState<PersistentScore>(() => loadPersistentScore());
+  const [roughLocation, setRoughLocation] = useState<RoughLocation | null>(() => loadRoughLocation());
+  const [locationStatus, setLocationStatus] = useState("idle");
 
   const secondsLeft = useMemo(() => {
     if (!chatEndsAt) {
@@ -357,6 +368,38 @@ function App() {
     });
   }
 
+  function requestRoughLocation() {
+    if (!("geolocation" in navigator)) {
+      setLocationStatus("unsupported");
+      return;
+    }
+
+    setLocationStatus("requesting");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const next = toRoughLocation(position.coords);
+
+        setRoughLocation(next);
+        saveRoughLocation(next);
+        setLocationStatus("ready");
+      },
+      () => {
+        setLocationStatus("blocked");
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 10 * 60 * 1000,
+        timeout: 8000,
+      },
+    );
+  }
+
+  function clearRoughLocation() {
+    setRoughLocation(null);
+    setLocationStatus("idle");
+    removeRoughLocation();
+  }
+
   return (
     <main className="appShell">
       <header className="topbar">
@@ -367,7 +410,16 @@ function App() {
         <StatusPill value={connection} />
       </header>
 
-      {phase === "landing" && <Landing onStart={startMatchmaking} persistentScore={persistentScore} />}
+      {phase === "landing" && (
+        <Landing
+          locationStatus={locationStatus}
+          onClearLocation={clearRoughLocation}
+          onRequestLocation={requestRoughLocation}
+          onStart={startMatchmaking}
+          persistentScore={persistentScore}
+          roughLocation={roughLocation}
+        />
+      )}
       {phase === "matching" && (
         <Matchmaking
           actualSeconds={actualQueueSeconds}
@@ -415,7 +467,21 @@ function StatusPill({ value }: { value: string }) {
   );
 }
 
-function Landing({ onStart, persistentScore }: { onStart: () => void; persistentScore: PersistentScore }) {
+function Landing({
+  locationStatus,
+  onClearLocation,
+  onRequestLocation,
+  onStart,
+  persistentScore,
+  roughLocation,
+}: {
+  locationStatus: string;
+  onClearLocation: () => void;
+  onRequestLocation: () => void;
+  onStart: () => void;
+  persistentScore: PersistentScore;
+  roughLocation: RoughLocation | null;
+}) {
   return (
     <section className="heroPanel">
       <div className="heroCopy">
@@ -431,6 +497,12 @@ function Landing({ onStart, persistentScore }: { onStart: () => void; persistent
         </button>
       </div>
       <div className="scoreSidebar">
+        <RoughLocationCard
+          location={roughLocation}
+          onClear={onClearLocation}
+          onRequest={onRequestLocation}
+          status={locationStatus}
+        />
         <PersistentScoreboard score={persistentScore} />
         <div className="scorePreview" aria-label="Scoring preview">
           <div>
@@ -448,6 +520,40 @@ function Landing({ onStart, persistentScore }: { onStart: () => void; persistent
         </div>
       </div>
     </section>
+  );
+}
+
+function RoughLocationCard({
+  location,
+  onClear,
+  onRequest,
+  status,
+}: {
+  location: RoughLocation | null;
+  onClear: () => void;
+  onRequest: () => void;
+  status: string;
+}) {
+  const statusText = getLocationStatusText(status, location);
+
+  return (
+    <aside className="locationCard" aria-label="Rough location">
+      <div>
+        <p className="roundLabel">Rough location</p>
+        <strong>{location ? `${formatCoordinate(location.lat)}, ${formatCoordinate(location.lng)}` : "Not set"}</strong>
+        <span>{statusText}</span>
+      </div>
+      <div className="locationActions">
+        <button className="secondaryButton" disabled={status === "requesting"} onClick={onRequest} type="button">
+          {location ? "Update" : status === "requesting" ? "Locating..." : "Use rough location"}
+        </button>
+        {location && (
+          <button className="textButton" onClick={onClear} type="button">
+            Clear
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -824,6 +930,46 @@ function formatSeconds(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function getLocationStatusText(status: string, location: RoughLocation | null) {
+  if (location) {
+    return `Approximate area within ${location.radiusKm} km.`;
+  }
+
+  if (status === "requesting") {
+    return "Waiting for browser permission.";
+  }
+
+  if (status === "blocked") {
+    return "Location permission was not granted.";
+  }
+
+  if (status === "unsupported") {
+    return "Location is unavailable in this browser.";
+  }
+
+  return "Stored locally after opt-in.";
+}
+
+function toRoughLocation(coords: GeolocationCoordinates): RoughLocation {
+  const accuracyKm = Number.isFinite(coords.accuracy) ? coords.accuracy / 1000 : 0;
+
+  return {
+    lat: roundToStep(coords.latitude, 0.5),
+    lng: roundToStep(coords.longitude, 0.5),
+    radiusKm: Math.max(50, Math.ceil(accuracyKm / 10) * 10),
+    source: "browser",
+    updatedAt: Date.now(),
+  };
+}
+
+function roundToStep(value: number, step: number) {
+  return Math.round(value / step) * step;
+}
+
+function formatCoordinate(value: number) {
+  return value.toFixed(1);
+}
+
 function loadPersistentScore(): PersistentScore {
   if (typeof window === "undefined") {
     return EMPTY_PERSISTENT_SCORE;
@@ -856,6 +1002,54 @@ function savePersistentScore(score: PersistentScore) {
     window.localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(score));
   } catch {
     // The in-memory scoreboard still updates if storage is unavailable.
+  }
+}
+
+function loadRoughLocation(): RoughLocation | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LOCATION_STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<RoughLocation>;
+    const lat = typeof parsed.lat === "number" && Number.isFinite(parsed.lat) ? parsed.lat : null;
+    const lng = typeof parsed.lng === "number" && Number.isFinite(parsed.lng) ? parsed.lng : null;
+
+    if (lat === null || lng === null) {
+      return null;
+    }
+
+    return {
+      lat,
+      lng,
+      radiusKm: toScoreNumber(parsed.radiusKm) || 50,
+      source: "browser",
+      updatedAt: toScoreNumber(parsed.updatedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveRoughLocation(location: RoughLocation) {
+  try {
+    window.localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(location));
+  } catch {
+    // Location still appears for the current session if storage is unavailable.
+  }
+}
+
+function removeRoughLocation() {
+  try {
+    window.localStorage.removeItem(LOCATION_STORAGE_KEY);
+  } catch {
+    // Nothing else to do if storage is unavailable.
   }
 }
 

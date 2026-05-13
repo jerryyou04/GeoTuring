@@ -184,6 +184,7 @@ button:disabled {
 }
 
 .scorePreview div,
+.locationCard,
 .persistentScore,
 .persistentScoreRows div,
 .resultStat {
@@ -198,16 +199,68 @@ button:disabled {
 }
 
 .scorePreview span,
+.locationCard span,
 .persistentScoreRows span,
 .resultStat span {
   color: #b7b0a2;
 }
 
 .scorePreview strong,
+.locationCard strong,
 .persistentScoreRows strong,
 .resultStat strong {
   color: #fff9ed;
   font-size: 1.25rem;
+}
+
+.locationCard {
+  display: grid;
+  align-items: stretch;
+  justify-content: initial;
+  gap: 14px;
+  background:
+    linear-gradient(180deg, rgba(45, 161, 121, 0.12), rgba(255, 255, 255, 0.05)),
+    rgba(255, 255, 255, 0.06);
+}
+
+.locationCard > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+
+.locationCard .roundLabel {
+  margin-bottom: 0;
+}
+
+.locationCard strong {
+  font-size: 1.45rem;
+}
+
+.locationCard span {
+  line-height: 1.4;
+}
+
+.locationActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.locationActions .secondaryButton {
+  min-height: 42px;
+  padding: 0 14px;
+}
+
+.textButton {
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  color: #cfc8b9;
+  font-weight: 800;
+}
+
+.textButton:hover {
+  color: #fff9ed;
 }
 
 .persistentScore {
