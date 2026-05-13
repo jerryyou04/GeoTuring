@@ -80,9 +80,19 @@ interface PersistentScore {
 interface RoughLocation {
   lat: number;
   lng: number;
+  country: string;
+  region: string;
   radiusKm: number;
-  source: "browser";
+  source: "browser" | "manual";
   updatedAt: number;
+}
+
+interface CountryReference {
+  code: string;
+  country: string;
+  region: string;
+  lat: number;
+  lng: number;
 }
 
 const API_URL =
@@ -96,6 +106,28 @@ const SOCKET_URL =
   API_URL;
 
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
+const COUNTRY_REFERENCES: CountryReference[] = [
+  { code: "AR", country: "Argentina", region: "South America", lat: -34.6, lng: -58.4 },
+  { code: "AU", country: "Australia", region: "Oceania", lat: -33.9, lng: 151.2 },
+  { code: "BR", country: "Brazil", region: "South America", lat: -23.6, lng: -46.6 },
+  { code: "CA", country: "Canada", region: "North America", lat: 43.7, lng: -79.4 },
+  { code: "CO", country: "Colombia", region: "South America", lat: 4.7, lng: -74.1 },
+  { code: "DE", country: "Germany", region: "Europe", lat: 52.5, lng: 13.4 },
+  { code: "ES", country: "Spain", region: "Europe", lat: 40.4, lng: -3.7 },
+  { code: "FR", country: "France", region: "Europe", lat: 48.9, lng: 2.4 },
+  { code: "GB", country: "United Kingdom", region: "Europe", lat: 51.5, lng: -0.1 },
+  { code: "IN", country: "India", region: "South Asia", lat: 28.6, lng: 77.2 },
+  { code: "IT", country: "Italy", region: "Europe", lat: 41.9, lng: 12.5 },
+  { code: "JP", country: "Japan", region: "East Asia", lat: 35.7, lng: 139.7 },
+  { code: "KR", country: "South Korea", region: "East Asia", lat: 37.6, lng: 127.0 },
+  { code: "MX", country: "Mexico", region: "North America", lat: 19.4, lng: -99.1 },
+  { code: "NL", country: "Netherlands", region: "Europe", lat: 52.4, lng: 4.9 },
+  { code: "PL", country: "Poland", region: "Europe", lat: 52.2, lng: 21.0 },
+  { code: "SE", country: "Sweden", region: "Europe", lat: 59.3, lng: 18.1 },
+  { code: "TR", country: "Turkey", region: "West Asia", lat: 41.0, lng: 29.0 },
+  { code: "US", country: "United States", region: "North America", lat: 39.1, lng: -77.0 },
+  { code: "ZA", country: "South Africa", region: "Southern Africa", lat: -26.2, lng: 28.0 },
+];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
 const LOCATION_STORAGE_KEY = "geoturing:rough-location:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
@@ -185,6 +217,11 @@ function App() {
   }
 
   function startMatchmaking() {
+    if (!roughLocation) {
+      setLocationStatus("required");
+      return;
+    }
+
     clearQueueUiTimers();
 
     const queuedAt = Date.now();
@@ -400,6 +437,28 @@ function App() {
     removeRoughLocation();
   }
 
+  function setManualCountry(countryCode: string) {
+    const reference = COUNTRY_REFERENCES.find((country) => country.code === countryCode);
+
+    if (!reference) {
+      return;
+    }
+
+    const next: RoughLocation = {
+      lat: reference.lat,
+      lng: reference.lng,
+      country: reference.country,
+      region: reference.region,
+      radiusKm: 250,
+      source: "manual",
+      updatedAt: Date.now(),
+    };
+
+    setRoughLocation(next);
+    saveRoughLocation(next);
+    setLocationStatus("ready");
+  }
+
   return (
     <main className="appShell">
       <header className="topbar">
@@ -414,6 +473,7 @@ function App() {
         <Landing
           locationStatus={locationStatus}
           onClearLocation={clearRoughLocation}
+          onManualCountry={setManualCountry}
           onRequestLocation={requestRoughLocation}
           onStart={startMatchmaking}
           persistentScore={persistentScore}
@@ -470,6 +530,7 @@ function StatusPill({ value }: { value: string }) {
 function Landing({
   locationStatus,
   onClearLocation,
+  onManualCountry,
   onRequestLocation,
   onStart,
   persistentScore,
@@ -477,6 +538,7 @@ function Landing({
 }: {
   locationStatus: string;
   onClearLocation: () => void;
+  onManualCountry: (countryCode: string) => void;
   onRequestLocation: () => void;
   onStart: () => void;
   persistentScore: PersistentScore;
@@ -493,13 +555,15 @@ function Landing({
           the model family.
         </p>
         <button className="primaryButton" onClick={onStart}>
-          Start matchmaking
+          {roughLocation ? "Start matchmaking" : "Set rough location to play"}
         </button>
       </div>
       <div className="scoreSidebar">
         <RoughLocationCard
+          countries={COUNTRY_REFERENCES}
           location={roughLocation}
           onClear={onClearLocation}
+          onManualCountry={onManualCountry}
           onRequest={onRequestLocation}
           status={locationStatus}
         />
@@ -524,13 +588,17 @@ function Landing({
 }
 
 function RoughLocationCard({
+  countries,
   location,
   onClear,
+  onManualCountry,
   onRequest,
   status,
 }: {
+  countries: CountryReference[];
   location: RoughLocation | null;
   onClear: () => void;
+  onManualCountry: (countryCode: string) => void;
   onRequest: () => void;
   status: string;
 }) {
@@ -540,7 +608,7 @@ function RoughLocationCard({
     <aside className="locationCard" aria-label="Rough location">
       <div>
         <p className="roundLabel">Rough location</p>
-        <strong>{location ? `${formatCoordinate(location.lat)}, ${formatCoordinate(location.lng)}` : "Not set"}</strong>
+        <strong>{location ? location.country : "Required"}</strong>
         <span>{statusText}</span>
       </div>
       <div className="locationActions">
@@ -553,6 +621,19 @@ function RoughLocationCard({
           </button>
         )}
       </div>
+      <select
+        aria-label="Set country manually"
+        className="countrySelect"
+        onChange={(event) => onManualCountry(event.target.value)}
+        value={location ? countries.find((country) => country.country === location.country)?.code || "" : ""}
+      >
+        <option value="">Choose country manually</option>
+        {countries.map((country) => (
+          <option key={country.code} value={country.code}>
+            {country.country}
+          </option>
+        ))}
+      </select>
     </aside>
   );
 }
@@ -932,7 +1013,7 @@ function formatSeconds(totalSeconds: number) {
 
 function getLocationStatusText(status: string, location: RoughLocation | null) {
   if (location) {
-    return `Approximate area within ${location.radiusKm} km.`;
+    return `${location.region}. Approximate area within ${location.radiusKm} km.`;
   }
 
   if (status === "requesting") {
@@ -947,15 +1028,24 @@ function getLocationStatusText(status: string, location: RoughLocation | null) {
     return "Location is unavailable in this browser.";
   }
 
-  return "Stored locally after opt-in.";
+  if (status === "required") {
+    return "Set a rough country before entering queue.";
+  }
+
+  return "Needed so another player can guess your country.";
 }
 
 function toRoughLocation(coords: GeolocationCoordinates): RoughLocation {
   const accuracyKm = Number.isFinite(coords.accuracy) ? coords.accuracy / 1000 : 0;
+  const lat = roundToStep(coords.latitude, 0.5);
+  const lng = roundToStep(coords.longitude, 0.5);
+  const country = resolveCountry(lat, lng);
 
   return {
-    lat: roundToStep(coords.latitude, 0.5),
-    lng: roundToStep(coords.longitude, 0.5),
+    lat,
+    lng,
+    country: country.country,
+    region: country.region,
     radiusKm: Math.max(50, Math.ceil(accuracyKm / 10) * 10),
     source: "browser",
     updatedAt: Date.now(),
@@ -966,8 +1056,20 @@ function roundToStep(value: number, step: number) {
   return Math.round(value / step) * step;
 }
 
-function formatCoordinate(value: number) {
-  return value.toFixed(1);
+function resolveCountry(lat: number, lng: number) {
+  return COUNTRY_REFERENCES.reduce((nearest, country) => {
+    const nearestDistance = roughDistance(nearest.lat, nearest.lng, lat, lng);
+    const countryDistance = roughDistance(country.lat, country.lng, lat, lng);
+
+    return countryDistance < nearestDistance ? country : nearest;
+  }, COUNTRY_REFERENCES[0]);
+}
+
+function roughDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const latDistance = lat1 - lat2;
+  const lngDistance = (lng1 - lng2) * Math.cos((lat2 * Math.PI) / 180);
+
+  return latDistance * latDistance + lngDistance * lngDistance;
 }
 
 function loadPersistentScore(): PersistentScore {
@@ -1025,11 +1127,17 @@ function loadRoughLocation(): RoughLocation | null {
       return null;
     }
 
+    const resolved = resolveCountry(lat, lng);
+    const country = typeof parsed.country === "string" ? parsed.country : resolved.country;
+    const region = typeof parsed.region === "string" ? parsed.region : resolved.region;
+
     return {
       lat,
       lng,
+      country,
+      region,
       radiusKm: toScoreNumber(parsed.radiusKm) || 50,
-      source: "browser",
+      source: parsed.source === "manual" ? "manual" : "browser",
       updatedAt: toScoreNumber(parsed.updatedAt),
     };
   } catch {
