@@ -107,6 +107,7 @@ const humanOpponents = [
 ];
 
 const sessions = new Map();
+const queueTimers = new Map();
 
 function createSession(socket) {
   const participant = createMockParticipant();
@@ -273,36 +274,76 @@ function pick(values) {
   return values[Math.floor(Math.random() * values.length)];
 }
 
+function clearQueueTimers(socketId) {
+  const timers = queueTimers.get(socketId) || [];
+
+  timers.forEach((timer) => clearTimeout(timer));
+  queueTimers.delete(socketId);
+}
+
 io.on("connection", (socket) => {
   socket.emit("connected", {
     socketId: socket.id,
   });
 
   socket.on("queue:join", () => {
-    const session = createSession(socket);
+    clearQueueTimers(socket.id);
 
-    socket.emit("session:created", {
-      sessionId: session.id,
-      chatEndsAt: session.chatEndsAt,
-      chatSeconds: CHAT_SECONDS,
-      intro: "An anonymous participant has joined.",
+    const queuedAt = Date.now();
+    const estimatedSeconds = 8;
+
+    socket.emit("queue:status", {
+      connectedProfiles: 1,
+      requiredProfiles: 2,
+      status: "searching",
+      queuedAt,
+      estimatedSeconds,
     });
 
-    setTimeout(() => {
-      if (!sessions.has(session.id)) {
+    const opponentTimer = setTimeout(() => {
+      socket.emit("queue:status", {
+        connectedProfiles: 2,
+        requiredProfiles: 2,
+        status: "found",
+        queuedAt,
+        estimatedSeconds,
+      });
+    }, 2200);
+
+    const sessionTimer = setTimeout(() => {
+      clearQueueTimers(socket.id);
+
+      if (!socket.connected) {
         return;
       }
 
-      socket.emit("partner:message", {
+      const session = createSession(socket);
+
+      socket.emit("session:created", {
         sessionId: session.id,
-        message: {
-          id: cryptoRandomId(),
-          author: "partner",
-          text: "hey, what should we talk about?",
-          sentAt: Date.now(),
-        },
+        chatEndsAt: session.chatEndsAt,
+        chatSeconds: CHAT_SECONDS,
+        intro: "An anonymous participant has joined.",
       });
-    }, 650);
+
+      setTimeout(() => {
+        if (!sessions.has(session.id)) {
+          return;
+        }
+
+        socket.emit("partner:message", {
+          sessionId: session.id,
+          message: {
+            id: cryptoRandomId(),
+            author: "partner",
+            text: "hey, what should we talk about?",
+            sentAt: Date.now(),
+          },
+        });
+      }, 650);
+    }, 3800);
+
+    queueTimers.set(socket.id, [opponentTimer, sessionTimer]);
   });
 
   socket.on("chat:message", (payload = {}) => {
@@ -361,6 +402,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    clearQueueTimers(socket.id);
+
     for (const [sessionId, session] of sessions.entries()) {
       if (session.playerSocketId === socket.id) {
         sessions.delete(sessionId);
