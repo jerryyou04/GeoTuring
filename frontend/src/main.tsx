@@ -1,6 +1,8 @@
-import React, { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import L from "leaflet";
 import { io, Socket } from "socket.io-client";
+import "leaflet/dist/leaflet.css";
 import "./styles.css";
 
 type Phase = "landing" | "matching" | "chat" | "identity" | "humanGuess" | "aiGuess" | "reveal";
@@ -71,10 +73,14 @@ const SOCKET_URL =
   API_URL;
 
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
-const MAP_WIDTH = 720;
-const MAP_HEIGHT = 360;
 const QUEUE_FOUND_DELAY_MS = 2400;
 const MATCH_FOUND_HOLD_MS = 1800;
+const GUESS_MARKER = L.divIcon({
+  className: "guessMarker",
+  html: "<span></span>",
+  iconSize: [34, 44],
+  iconAnchor: [17, 42],
+});
 
 function App() {
   const socketRef = useRef<Socket | null>(null);
@@ -450,7 +456,7 @@ function ProfileSlot({ active, label }: { active: boolean; label: string }) {
   return (
     <div className={`profileSlot ${active ? "active" : ""}`}>
       <div className="portrait">
-        <span />
+        {active ? <span className="profileIcon" /> : <span className="unknownIcon">?</span>}
       </div>
       <strong>{active ? label : "Waiting..."}</strong>
       <small>{active ? "Connected" : "Pending"}</small>
@@ -537,19 +543,6 @@ function HumanGuessScreen({
   onBack: () => void;
   onSubmit: () => void;
 }) {
-  function placePin(event: MouseEvent<SVGSVGElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * MAP_WIDTH;
-    const y = ((event.clientY - rect.top) / rect.height) * MAP_HEIGHT;
-
-    onPin({
-      lat: clamp(90 - (y / MAP_HEIGHT) * 180, -90, 90),
-      lng: clamp((x / MAP_WIDTH) * 360 - 180, -180, 180),
-    });
-  }
-
-  const point = pin ? latLngToPoint(pin) : null;
-
   return (
     <section className="gamePanel">
       <div className="chatHeader">
@@ -562,23 +555,7 @@ function HumanGuessScreen({
         </button>
       </div>
 
-      <svg className="worldMap" viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} role="button" onClick={placePin}>
-        <rect width="720" height="360" rx="24" />
-        <path d="M108 92 L168 62 L236 82 L258 126 L228 164 L152 154 L94 132 Z" />
-        <path d="M208 182 L268 198 L286 260 L252 326 L210 282 L184 226 Z" />
-        <path d="M336 86 L398 60 L500 72 L602 122 L562 178 L448 166 L352 142 Z" />
-        <path d="M388 172 L448 186 L480 250 L444 318 L394 276 L366 214 Z" />
-        <path d="M544 218 L624 226 L668 282 L620 324 L548 298 Z" />
-        <path d="M70 238 L116 230 L126 270 L88 286 Z" />
-        <line x1="0" y1="180" x2="720" y2="180" />
-        <line x1="360" y1="0" x2="360" y2="360" />
-        {point && (
-          <g className="pin" transform={`translate(${point.x} ${point.y})`}>
-            <circle r="12" />
-            <circle r="4" />
-          </g>
-        )}
-      </svg>
+      <GuessMap pin={pin} onPin={onPin} />
 
       <div className="mapFooter">
         <span>{pin ? `${pin.lat.toFixed(1)} lat, ${pin.lng.toFixed(1)} lng` : "Tap the map to place a pin."}</span>
@@ -587,6 +564,86 @@ function HumanGuessScreen({
         </button>
       </div>
     </section>
+  );
+}
+
+function GuessMap({ pin, onPin }: { pin: Pin | null; onPin: (pin: Pin) => void }) {
+  const mapElementRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  const onPinRef = useRef(onPin);
+
+  useEffect(() => {
+    onPinRef.current = onPin;
+  }, [onPin]);
+
+  useEffect(() => {
+    if (!mapElementRef.current || mapRef.current) {
+      return;
+    }
+
+    const map = L.map(mapElementRef.current, {
+      center: [20, 0],
+      zoom: 2,
+      minZoom: 2,
+      maxZoom: 18,
+      worldCopyJump: true,
+      zoomControl: false,
+    });
+
+    L.control.zoom({ position: "topright" }).addTo(map);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
+
+    map.on("click", (event: L.LeafletMouseEvent) => {
+      onPinRef.current({
+        lat: event.latlng.lat,
+        lng: event.latlng.lng,
+      });
+    });
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map) {
+      return;
+    }
+
+    window.setTimeout(() => map.invalidateSize(), 0);
+
+    if (!pin) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      return;
+    }
+
+    const latLng = L.latLng(pin.lat, pin.lng);
+
+    if (!markerRef.current) {
+      markerRef.current = L.marker(latLng, {
+        icon: GUESS_MARKER,
+      }).addTo(map);
+    } else {
+      markerRef.current.setLatLng(latLng);
+    }
+  }, [pin]);
+
+  return (
+    <div className="guessMapShell">
+      <div className="guessMap" ref={mapElementRef} />
+      <div className="mapCallout">Click anywhere to place your final guess.</div>
+    </div>
   );
 }
 
@@ -663,17 +720,6 @@ function formatSeconds(totalSeconds: number) {
   const seconds = totalSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function latLngToPoint(pin: Pin) {
-  return {
-    x: ((pin.lng + 180) / 360) * MAP_WIDTH,
-    y: ((90 - pin.lat) / 180) * MAP_HEIGHT,
-  };
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

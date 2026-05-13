@@ -315,13 +315,25 @@ button:disabled {
     linear-gradient(145deg, #20464a, #071012);
 }
 
-.portrait span {
+.profileIcon {
   width: 38px;
   height: 38px;
   border: 2px solid currentColor;
   border-radius: 50% 50% 44% 44%;
   box-shadow: 0 28px 0 -11px currentColor;
   opacity: 0.82;
+}
+
+.unknownIcon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  color: #ad8239;
+  font-size: 2.4rem;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 0 18px rgba(173, 130, 57, 0.32);
 }
 
 .profileSlot strong {
@@ -549,37 +561,94 @@ button:disabled {
   color: #b7b0a2;
 }
 
-.worldMap {
-  width: 100%;
-  max-height: 58vh;
+.guessMapShell {
+  position: relative;
+  min-height: min(62vh, 620px);
+  overflow: hidden;
+  border: 1px solid rgba(244, 241, 232, 0.16);
   border-radius: 8px;
-  cursor: crosshair;
+  background: #14211f;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.worldMap rect {
-  fill: #13201f;
+.guessMap {
+  width: 100%;
+  height: min(62vh, 620px);
+  min-height: 430px;
 }
 
-.worldMap path {
-  fill: #2da179;
-  opacity: 0.78;
-  stroke: rgba(255, 249, 237, 0.48);
-  stroke-width: 2;
+.guessMap.leaflet-container {
+  background: #14211f;
+  font: inherit;
 }
 
-.worldMap line {
-  stroke: rgba(255, 249, 237, 0.18);
-  stroke-dasharray: 6 8;
+.guessMap .leaflet-control-zoom {
+  overflow: hidden;
+  border: 1px solid rgba(23, 33, 31, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
 }
 
-.pin circle:first-child {
-  fill: rgba(230, 106, 82, 0.24);
-  stroke: #ff8168;
-  stroke-width: 3;
+.guessMap .leaflet-control-zoom a {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: #f7f5ef;
+  color: #19211e;
+  font-size: 1.2rem;
+  line-height: 38px;
 }
 
-.pin circle:last-child {
-  fill: #fff9ed;
+.guessMap .leaflet-control-attribution {
+  background: rgba(247, 245, 239, 0.9);
+  color: #25302c;
+  font-size: 0.7rem;
+}
+
+.mapCallout {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 500;
+  max-width: min(360px, calc(100% - 28px));
+  padding: 10px 12px;
+  border: 1px solid rgba(25, 33, 30, 0.16);
+  border-radius: 8px;
+  background: rgba(247, 245, 239, 0.94);
+  color: #19211e;
+  font-size: 0.9rem;
+  font-weight: 800;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+}
+
+.guessMarker {
+  position: relative;
+}
+
+.guessMarker::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #ffffff;
+  border-radius: 50% 50% 50% 0;
+  background: #e6422f;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.34);
+  content: "";
+  transform: translateX(-50%) rotate(-45deg);
+}
+
+.guessMarker span {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ffffff;
+  transform: translateX(-50%);
 }
 
 .mapFooter {
@@ -660,5 +729,14 @@ button:disabled {
 
   .message {
     max-width: 92%;
+  }
+
+  .guessMapShell {
+    min-height: 420px;
+  }
+
+  .guessMap {
+    height: 420px;
+    min-height: 420px;
   }
 }
