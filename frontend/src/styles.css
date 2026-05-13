@@ -171,6 +171,12 @@ button:disabled {
   color: #f4f1e8;
 }
 
+.scoreSidebar {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+}
+
 .scorePreview {
   display: grid;
   align-content: center;
@@ -178,6 +184,8 @@ button:disabled {
 }
 
 .scorePreview div,
+.persistentScore,
+.persistentScoreRows div,
 .resultStat {
   display: flex;
   align-items: center;
@@ -190,14 +198,50 @@ button:disabled {
 }
 
 .scorePreview span,
+.persistentScoreRows span,
 .resultStat span {
   color: #b7b0a2;
 }
 
 .scorePreview strong,
+.persistentScoreRows strong,
 .resultStat strong {
   color: #fff9ed;
   font-size: 1.25rem;
+}
+
+.persistentScore {
+  display: grid;
+  align-items: initial;
+  justify-content: initial;
+  gap: 12px;
+}
+
+.persistentScore .roundLabel {
+  margin-bottom: 0;
+}
+
+.persistentScoreRows {
+  display: grid;
+  gap: 10px;
+}
+
+.persistentScoreRows div {
+  min-height: 58px;
+  padding: 12px 14px;
+  background: rgba(45, 161, 121, 0.1);
+}
+
+.persistentScoreRows strong {
+  margin-left: auto;
+}
+
+.persistentScoreRows small {
+  min-width: 58px;
+  color: #8de0bd;
+  font-weight: 900;
+  text-align: right;
+  text-transform: uppercase;
 }
 
 .centerPanel {

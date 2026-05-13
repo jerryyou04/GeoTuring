@@ -33,6 +33,7 @@ interface QueueStatusPayload {
 }
 
 interface ResultPayload {
+  sessionId: string;
   correctIdentity: boolean;
   score: {
     read: {
@@ -67,6 +68,14 @@ interface Pin {
   lng: number;
 }
 
+interface PersistentScore {
+  rounds: number;
+  readEarned: number;
+  readPossible: number;
+  roundEarned: number;
+  roundPossible: number;
+}
+
 const API_URL =
   import.meta.env.NEXT_PUBLIC_API_URL ||
   import.meta.env.VITE_API_URL ||
@@ -78,6 +87,14 @@ const SOCKET_URL =
   API_URL;
 
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
+const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
+const EMPTY_PERSISTENT_SCORE: PersistentScore = {
+  rounds: 0,
+  readEarned: 0,
+  readPossible: 0,
+  roundEarned: 0,
+  roundPossible: 0,
+};
 const QUEUE_FOUND_DELAY_MS = 2400;
 const MATCH_FOUND_HOLD_MS = 1800;
 const GUESS_MARKER = L.divIcon({
@@ -91,6 +108,7 @@ function App() {
   const socketRef = useRef<Socket | null>(null);
   const queueStartedAtRef = useRef<number | null>(null);
   const queueTimersRef = useRef<number[]>([]);
+  const scoredSessionsRef = useRef<Set<string>>(new Set());
   const [phase, setPhase] = useState<Phase>("landing");
   const [connection, setConnection] = useState("idle");
   const [sessionId, setSessionId] = useState("");
@@ -107,6 +125,7 @@ function App() {
   const [requiredProfiles, setRequiredProfiles] = useState(2);
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
   const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
+  const [persistentScore, setPersistentScore] = useState<PersistentScore>(() => loadPersistentScore());
 
   const secondsLeft = useMemo(() => {
     if (!chatEndsAt) {
@@ -215,6 +234,7 @@ function App() {
     });
 
     socket.on("session:result", (payload: ResultPayload) => {
+      recordPersistentScore(payload);
       setResult(payload);
       setPhase("reveal");
     });
@@ -312,6 +332,27 @@ function App() {
     setPhase("chat");
   }
 
+  function recordPersistentScore(payload: ResultPayload) {
+    if (scoredSessionsRef.current.has(payload.sessionId)) {
+      return;
+    }
+
+    scoredSessionsRef.current.add(payload.sessionId);
+
+    setPersistentScore((current) => {
+      const next = {
+        rounds: current.rounds + 1,
+        readEarned: current.readEarned + payload.score.read.earned,
+        readPossible: current.readPossible + payload.score.read.possible,
+        roundEarned: current.roundEarned + payload.score.round.earned,
+        roundPossible: current.roundPossible + payload.score.round.possible,
+      };
+
+      savePersistentScore(next);
+      return next;
+    });
+  }
+
   return (
     <main className="appShell">
       <header className="topbar">
@@ -322,7 +363,7 @@ function App() {
         <StatusPill value={connection} />
       </header>
 
-      {phase === "landing" && <Landing onStart={startMatchmaking} />}
+      {phase === "landing" && <Landing onStart={startMatchmaking} persistentScore={persistentScore} />}
       {phase === "matching" && (
         <Matchmaking
           actualSeconds={actualQueueSeconds}
@@ -370,7 +411,7 @@ function StatusPill({ value }: { value: string }) {
   );
 }
 
-function Landing({ onStart }: { onStart: () => void }) {
+function Landing({ onStart, persistentScore }: { onStart: () => void; persistentScore: PersistentScore }) {
   return (
     <section className="heroPanel">
       <div className="heroCopy">
@@ -385,21 +426,52 @@ function Landing({ onStart }: { onStart: () => void }) {
           Start matchmaking
         </button>
       </div>
-      <div className="scorePreview" aria-label="Scoring preview">
-        <div>
-          <span>Read score</span>
-          <strong>0/1 or 1/1</strong>
-        </div>
-        <div>
-          <span>Human round</span>
-          <strong>0-100</strong>
-        </div>
-        <div>
-          <span>AI round</span>
-          <strong>0 or 100</strong>
+      <div className="scoreSidebar">
+        <PersistentScoreboard score={persistentScore} />
+        <div className="scorePreview" aria-label="Scoring preview">
+          <div>
+            <span>Read score</span>
+            <strong>0/1 or 1/1</strong>
+          </div>
+          <div>
+            <span>Human round</span>
+            <strong>0-100</strong>
+          </div>
+          <div>
+            <span>AI round</span>
+            <strong>0 or 100</strong>
+          </div>
         </div>
       </div>
     </section>
+  );
+}
+
+function PersistentScoreboard({ score }: { score: PersistentScore }) {
+  const readPercent =
+    score.readPossible === 0 ? 0 : Math.round((score.readEarned / score.readPossible) * 100);
+  const roundAverage =
+    score.roundPossible === 0 ? 0 : Math.round((score.roundEarned / score.roundPossible) * 100);
+
+  return (
+    <aside className="persistentScore" aria-label="Persistent score">
+      <p className="roundLabel">Your scoreboard</p>
+      <div className="persistentScoreRows">
+        <ScoreLine label="Rounds" value={`${score.rounds}`} />
+        <ScoreLine label="Reads" value={`${score.readEarned}/${score.readPossible}`} detail={`${readPercent}%`} />
+        <ScoreLine label="Round points" value={`${score.roundEarned}/${score.roundPossible}`} detail={`${roundAverage}% avg`} />
+      </div>
+    </aside>
+  );
+}
+
+function ScoreLine({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail && <small>{detail}</small>}
+    </div>
   );
 }
 
@@ -745,6 +817,44 @@ function formatSeconds(totalSeconds: number) {
   const seconds = totalSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function loadPersistentScore(): PersistentScore {
+  if (typeof window === "undefined") {
+    return EMPTY_PERSISTENT_SCORE;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SCORE_STORAGE_KEY);
+
+    if (!raw) {
+      return EMPTY_PERSISTENT_SCORE;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PersistentScore>;
+
+    return {
+      rounds: toScoreNumber(parsed.rounds),
+      readEarned: toScoreNumber(parsed.readEarned),
+      readPossible: toScoreNumber(parsed.readPossible),
+      roundEarned: toScoreNumber(parsed.roundEarned),
+      roundPossible: toScoreNumber(parsed.roundPossible),
+    };
+  } catch {
+    return EMPTY_PERSISTENT_SCORE;
+  }
+}
+
+function savePersistentScore(score: PersistentScore) {
+  try {
+    window.localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(score));
+  } catch {
+    // The in-memory scoreboard still updates if storage is unavailable.
+  }
+}
+
+function toScoreNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
