@@ -66,14 +66,13 @@ local development.
 
 ## Scoring
 
-Each round returns two scores:
+Each round returns a read score plus a type-specific round score:
 
 - Read score: `0/1` or `1/1` for correctly identifying Human vs AI.
-- Round score: `0/100` through `100/100`.
-
-For human participants, the round score is based on haversine distance from the
-actual location. For AI participants, the round score is `100/100` for the exact
-model family and `0/100` otherwise.
+- Human round score: `0/100` through `100/100`, based on haversine distance
+  from the actual location.
+- AI round score: `0/1` or `1/1`. The point requires correctly identifying the
+  participant as AI and guessing the exact model family.
 
 ## Railway Deployment
 

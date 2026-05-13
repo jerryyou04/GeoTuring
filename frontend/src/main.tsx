@@ -69,11 +69,12 @@ interface Pin {
 }
 
 interface PersistentScore {
-  rounds: number;
   readEarned: number;
   readPossible: number;
-  roundEarned: number;
-  roundPossible: number;
+  humanEarned: number;
+  humanPossible: number;
+  aiEarned: number;
+  aiPossible: number;
 }
 
 const API_URL =
@@ -89,11 +90,12 @@ const SOCKET_URL =
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
-  rounds: 0,
   readEarned: 0,
   readPossible: 0,
-  roundEarned: 0,
-  roundPossible: 0,
+  humanEarned: 0,
+  humanPossible: 0,
+  aiEarned: 0,
+  aiPossible: 0,
 };
 const QUEUE_FOUND_DELAY_MS = 2400;
 const MATCH_FOUND_HOLD_MS = 1800;
@@ -340,12 +342,14 @@ function App() {
     scoredSessionsRef.current.add(payload.sessionId);
 
     setPersistentScore((current) => {
+      const isHumanRound = payload.actual.participantType === "Human";
       const next = {
-        rounds: current.rounds + 1,
         readEarned: current.readEarned + payload.score.read.earned,
         readPossible: current.readPossible + payload.score.read.possible,
-        roundEarned: current.roundEarned + payload.score.round.earned,
-        roundPossible: current.roundPossible + payload.score.round.possible,
+        humanEarned: current.humanEarned + (isHumanRound ? payload.score.round.earned : 0),
+        humanPossible: current.humanPossible + (isHumanRound ? payload.score.round.possible : 0),
+        aiEarned: current.aiEarned + (!isHumanRound ? payload.score.round.earned : 0),
+        aiPossible: current.aiPossible + (!isHumanRound ? payload.score.round.possible : 0),
       };
 
       savePersistentScore(next);
@@ -439,7 +443,7 @@ function Landing({ onStart, persistentScore }: { onStart: () => void; persistent
           </div>
           <div>
             <span>AI round</span>
-            <strong>0 or 100</strong>
+            <strong>0/1 or 1/1</strong>
           </div>
         </div>
       </div>
@@ -450,16 +454,17 @@ function Landing({ onStart, persistentScore }: { onStart: () => void; persistent
 function PersistentScoreboard({ score }: { score: PersistentScore }) {
   const readPercent =
     score.readPossible === 0 ? 0 : Math.round((score.readEarned / score.readPossible) * 100);
-  const roundAverage =
-    score.roundPossible === 0 ? 0 : Math.round((score.roundEarned / score.roundPossible) * 100);
+  const humanAverage =
+    score.humanPossible === 0 ? 0 : Math.round((score.humanEarned / score.humanPossible) * 100);
+  const aiPercent = score.aiPossible === 0 ? 0 : Math.round((score.aiEarned / score.aiPossible) * 100);
 
   return (
     <aside className="persistentScore" aria-label="Persistent score">
       <p className="roundLabel">Your scoreboard</p>
       <div className="persistentScoreRows">
-        <ScoreLine label="Rounds" value={`${score.rounds}`} />
         <ScoreLine label="Reads" value={`${score.readEarned}/${score.readPossible}`} detail={`${readPercent}%`} />
-        <ScoreLine label="Round points" value={`${score.roundEarned}/${score.roundPossible}`} detail={`${roundAverage}% avg`} />
+        <ScoreLine label="Human score" value={`${score.humanEarned}/${score.humanPossible}`} detail={`${humanAverage}% avg`} />
+        <ScoreLine label="AI score" value={`${score.aiEarned}/${score.aiPossible}`} detail={`${aiPercent}%`} />
       </div>
     </aside>
   );
@@ -834,11 +839,12 @@ function loadPersistentScore(): PersistentScore {
     const parsed = JSON.parse(raw) as Partial<PersistentScore>;
 
     return {
-      rounds: toScoreNumber(parsed.rounds),
       readEarned: toScoreNumber(parsed.readEarned),
       readPossible: toScoreNumber(parsed.readPossible),
-      roundEarned: toScoreNumber(parsed.roundEarned),
-      roundPossible: toScoreNumber(parsed.roundPossible),
+      humanEarned: toScoreNumber(parsed.humanEarned),
+      humanPossible: toScoreNumber(parsed.humanPossible),
+      aiEarned: toScoreNumber(parsed.aiEarned),
+      aiPossible: toScoreNumber(parsed.aiPossible),
     };
   } catch {
     return EMPTY_PERSISTENT_SCORE;

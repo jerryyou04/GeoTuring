@@ -170,6 +170,7 @@ function scoreGuess(session, guess) {
   const readScore = correctIdentity ? 1 : 0;
   let roundScore = 0;
   let roundType = actualType === "Human" ? "location" : "modelFamily";
+  let roundPossible = actualType === "Human" ? 100 : 1;
   let distanceKm = null;
 
   if (
@@ -192,7 +193,7 @@ function scoreGuess(session, guess) {
     identityGuess === "AI" &&
     guess.modelFamilyGuess === session.participant.modelFamily
   ) {
-    roundScore = 100;
+    roundScore = 1;
   }
 
   return {
@@ -205,7 +206,7 @@ function scoreGuess(session, guess) {
       },
       round: {
         earned: roundScore,
-        possible: 100,
+        possible: roundPossible,
         type: roundType,
       },
     },
@@ -247,7 +248,7 @@ function buildExplanation(participant, correctIdentity, distanceKm) {
     return `${correctIdentity ? "You called the identity correctly." : "The identity read was off."} ${locationText}`;
   }
 
-  return `${correctIdentity ? "You spotted the AI." : "The identity read was off."} The model-family round score is 100/100 only for the exact family: ${participant.modelFamily}.`;
+  return `${correctIdentity ? "You spotted the AI." : "The identity read was off."} The AI round score is 1/1 only for the exact family: ${participant.modelFamily}.`;
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {
