@@ -6,6 +6,7 @@ import "./styles.css";
 type Phase = "landing" | "matching" | "chat" | "identity" | "humanGuess" | "aiGuess" | "reveal";
 type IdentityGuess = "Human" | "AI";
 type ModelFamily = "GPT" | "Claude" | "Gemini" | "Llama" | "Mistral" | "Other";
+type QueueStatus = "idle" | "searching" | "found";
 
 interface ChatMessage {
   id: string;
@@ -19,6 +20,14 @@ interface SessionCreatedPayload {
   chatEndsAt: number;
   chatSeconds: number;
   intro: string;
+}
+
+interface QueueStatusPayload {
+  connectedProfiles: number;
+  requiredProfiles: number;
+  status: QueueStatus;
+  queuedAt: number;
+  estimatedSeconds: number;
 }
 
 interface ResultPayload {
@@ -64,9 +73,13 @@ const SOCKET_URL =
 const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 360;
+const QUEUE_FOUND_DELAY_MS = 2400;
+const MATCH_FOUND_HOLD_MS = 1800;
 
 function App() {
   const socketRef = useRef<Socket | null>(null);
+  const queueStartedAtRef = useRef<number | null>(null);
+  const queueTimersRef = useRef<number[]>([]);
   const [phase, setPhase] = useState<Phase>("landing");
   const [connection, setConnection] = useState("idle");
   const [sessionId, setSessionId] = useState("");
@@ -78,6 +91,11 @@ function App() {
   const [modelGuess, setModelGuess] = useState<ModelFamily | null>(null);
   const [result, setResult] = useState<ResultPayload | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>("idle");
+  const [connectedProfiles, setConnectedProfiles] = useState(0);
+  const [requiredProfiles, setRequiredProfiles] = useState(2);
+  const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
+  const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
 
   const secondsLeft = useMemo(() => {
     if (!chatEndsAt) {
@@ -87,8 +105,16 @@ function App() {
     return Math.max(0, Math.ceil((chatEndsAt - now) / 1000));
   }, [chatEndsAt, now]);
 
+  const actualQueueSeconds = useMemo(() => {
+    if (!queueStartedAt) {
+      return 0;
+    }
+
+    return Math.max(0, Math.floor((now - queueStartedAt) / 1000));
+  }, [now, queueStartedAt]);
+
   useEffect(() => {
-    if (phase !== "chat") {
+    if (phase !== "chat" && phase !== "matching") {
       return;
     }
 
@@ -104,10 +130,22 @@ function App() {
   }, [chatEndsAt, phase, secondsLeft]);
 
   useEffect(() => {
-    return () => socketRef.current?.disconnect();
+    return () => {
+      clearQueueUiTimers();
+      socketRef.current?.disconnect();
+    };
   }, []);
 
+  function clearQueueUiTimers() {
+    queueTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    queueTimersRef.current = [];
+  }
+
   function startMatchmaking() {
+    clearQueueUiTimers();
+
+    const queuedAt = Date.now();
+
     setPhase("matching");
     setConnection("connecting");
     setResult(null);
@@ -115,6 +153,20 @@ function App() {
     setPin(null);
     setModelGuess(null);
     setMessages([]);
+    setQueueStatus("searching");
+    setConnectedProfiles(1);
+    setRequiredProfiles(2);
+    setQueueStartedAt(queuedAt);
+    queueStartedAtRef.current = queuedAt;
+    setEstimatedQueueSeconds(8);
+    setNow(queuedAt);
+
+    queueTimersRef.current.push(
+      window.setTimeout(() => {
+        setConnectedProfiles(2);
+        setQueueStatus("found");
+      }, QUEUE_FOUND_DELAY_MS),
+    );
 
     socketRef.current?.disconnect();
     const socket = io(SOCKET_URL, {
@@ -132,19 +184,19 @@ function App() {
       setConnection("disconnected");
     });
 
+    socket.on("queue:status", (payload: QueueStatusPayload) => {
+      setQueueStatus(payload.status);
+      setConnectedProfiles(payload.connectedProfiles);
+      setRequiredProfiles(payload.requiredProfiles);
+      setQueueStartedAt(payload.queuedAt);
+      queueStartedAtRef.current = payload.queuedAt;
+      setEstimatedQueueSeconds(payload.estimatedSeconds);
+    });
+
     socket.on("session:created", (payload: SessionCreatedPayload) => {
-      setSessionId(payload.sessionId);
-      setChatEndsAt(payload.chatEndsAt);
-      setNow(Date.now());
-      setMessages([
-        {
-          id: "intro",
-          author: "system",
-          text: payload.intro,
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("chat");
+      queueTimersRef.current.push(
+        window.setTimeout(() => enterChat(payload), getQueueTransitionDelay()),
+      );
     });
 
     socket.on("partner:message", (payload: { message: ChatMessage }) => {
@@ -205,6 +257,7 @@ function App() {
   }
 
   function restart() {
+    clearQueueUiTimers();
     socketRef.current?.disconnect();
     setPhase("landing");
     setConnection("idle");
@@ -216,6 +269,36 @@ function App() {
     setPin(null);
     setModelGuess(null);
     setResult(null);
+    setQueueStatus("idle");
+    setConnectedProfiles(0);
+    setRequiredProfiles(2);
+    setQueueStartedAt(null);
+    queueStartedAtRef.current = null;
+    setEstimatedQueueSeconds(8);
+  }
+
+  function getQueueTransitionDelay() {
+    const startedAt = queueStartedAtRef.current || Date.now();
+    const elapsed = Date.now() - startedAt;
+
+    return Math.max(0, QUEUE_FOUND_DELAY_MS + MATCH_FOUND_HOLD_MS - elapsed);
+  }
+
+  function enterChat(payload: SessionCreatedPayload) {
+    setSessionId(payload.sessionId);
+    setChatEndsAt(payload.chatEndsAt);
+    setNow(Date.now());
+    setMessages([
+      {
+        id: "intro",
+        author: "system",
+        text: payload.intro,
+        sentAt: Date.now(),
+      },
+    ]);
+    setQueueStatus("found");
+    setConnectedProfiles(2);
+    setPhase("chat");
   }
 
   return (
@@ -229,7 +312,15 @@ function App() {
       </header>
 
       {phase === "landing" && <Landing onStart={startMatchmaking} />}
-      {phase === "matching" && <Matchmaking />}
+      {phase === "matching" && (
+        <Matchmaking
+          actualSeconds={actualQueueSeconds}
+          connectedProfiles={connectedProfiles}
+          estimatedSeconds={estimatedQueueSeconds}
+          requiredProfiles={requiredProfiles}
+          status={queueStatus}
+        />
+      )}
       {phase === "chat" && (
         <ChatRoom
           draft={draft}
@@ -301,13 +392,69 @@ function Landing({ onStart }: { onStart: () => void }) {
   );
 }
 
-function Matchmaking() {
+function Matchmaking({
+  actualSeconds,
+  connectedProfiles,
+  estimatedSeconds,
+  requiredProfiles,
+  status,
+}: {
+  actualSeconds: number;
+  connectedProfiles: number;
+  estimatedSeconds: number;
+  requiredProfiles: number;
+  status: QueueStatus;
+}) {
+  const isFound = status === "found";
+
   return (
-    <section className="centerPanel">
-      <div className="loader" />
-      <h2>Finding an anonymous participant</h2>
-      <p>For this MVP, a simulated opponent fills in when no live player is available.</p>
+    <section className={`queuePanel ${isFound ? "matchFound" : ""}`}>
+      <div className="queueFrame">
+        <div className="queueHeader">
+          <p className="roundLabel">Blind pick queue</p>
+          <h2>{isFound ? "Match found!" : "Finding match"}</h2>
+        </div>
+
+        <div className="summonerSlots" aria-label={`${connectedProfiles} of ${requiredProfiles} profiles connected`}>
+          <ProfileSlot label="You" active={connectedProfiles >= 1} />
+          <ProfileSlot label="Unknown" active={connectedProfiles >= 2} />
+        </div>
+
+        <div className="queueMeter" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, (connectedProfiles / requiredProfiles) * 100)}%` }} />
+        </div>
+
+        <div className="queueStatusLine">
+          <strong>
+            {Math.min(connectedProfiles, requiredProfiles)}/{requiredProfiles} profiles connected
+          </strong>
+          <span>{isFound ? "Entering game..." : "Searching for a worthy opponent"}</span>
+        </div>
+
+        <div className="queueTimes">
+          <div>
+            <span>Actual Queue Time</span>
+            <strong>{formatSeconds(actualSeconds)}</strong>
+          </div>
+          <div>
+            <span>Estimated Queue Time</span>
+            <strong>{formatSeconds(estimatedSeconds)}</strong>
+          </div>
+        </div>
+      </div>
     </section>
+  );
+}
+
+function ProfileSlot({ active, label }: { active: boolean; label: string }) {
+  return (
+    <div className={`profileSlot ${active ? "active" : ""}`}>
+      <div className="portrait">
+        <span />
+      </div>
+      <strong>{active ? label : "Waiting..."}</strong>
+      <small>{active ? "Connected" : "Pending"}</small>
+    </div>
   );
 }
 

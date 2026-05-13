@@ -98,7 +98,8 @@ button:disabled {
 
 .heroPanel,
 .gamePanel,
-.centerPanel {
+.centerPanel,
+.queuePanel {
   width: min(100%, 1100px);
   align-self: stretch;
   justify-self: center;
@@ -206,6 +207,191 @@ button:disabled {
   min-height: 430px;
   padding: clamp(22px, 5vw, 48px);
   text-align: center;
+}
+
+.queuePanel {
+  display: grid;
+  min-height: 520px;
+  place-items: center;
+  padding: clamp(18px, 4vw, 38px);
+  background:
+    linear-gradient(180deg, rgba(31, 41, 44, 0.94), rgba(8, 12, 13, 0.96)),
+    rgba(13, 15, 16, 0.78);
+}
+
+.queueFrame {
+  display: grid;
+  width: min(100%, 760px);
+  gap: 22px;
+  padding: clamp(18px, 4vw, 34px);
+  border: 1px solid rgba(225, 177, 82, 0.55);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(21, 45, 51, 0.92), rgba(7, 11, 13, 0.96)),
+    #0a1113;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 239, 179, 0.12),
+    0 0 50px rgba(0, 0, 0, 0.46);
+}
+
+.queueHeader {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+.queueHeader h2 {
+  color: #f5d485;
+  text-shadow: 0 0 22px rgba(240, 185, 77, 0.28);
+  text-transform: uppercase;
+}
+
+.matchFound .queueHeader h2 {
+  color: #fff3bf;
+  animation: foundPulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes foundPulse {
+  from {
+    transform: scale(1);
+    text-shadow: 0 0 18px rgba(240, 185, 77, 0.35);
+  }
+
+  to {
+    transform: scale(1.025);
+    text-shadow: 0 0 34px rgba(240, 185, 77, 0.72);
+  }
+}
+
+.summonerSlots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.profileSlot {
+  display: grid;
+  min-height: 190px;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid rgba(173, 130, 57, 0.38);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(5, 14, 18, 0.2), rgba(0, 0, 0, 0.48)),
+    #0f1719;
+  color: #776f61;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
+}
+
+.profileSlot.active {
+  border-color: rgba(240, 185, 77, 0.9);
+  color: #f4f1e8;
+  box-shadow:
+    inset 0 0 26px rgba(45, 161, 121, 0.12),
+    0 0 28px rgba(240, 185, 77, 0.12);
+}
+
+.portrait {
+  display: grid;
+  width: 88px;
+  height: 88px;
+  place-items: center;
+  border: 2px solid rgba(173, 130, 57, 0.56);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 34%, rgba(244, 241, 232, 0.18), transparent 24%),
+    linear-gradient(145deg, #19272b, #071012);
+}
+
+.profileSlot.active .portrait {
+  border-color: #f0b94d;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(141, 224, 189, 0.42), transparent 24%),
+    linear-gradient(145deg, #20464a, #071012);
+}
+
+.portrait span {
+  width: 38px;
+  height: 38px;
+  border: 2px solid currentColor;
+  border-radius: 50% 50% 44% 44%;
+  box-shadow: 0 28px 0 -11px currentColor;
+  opacity: 0.82;
+}
+
+.profileSlot strong {
+  margin-top: 12px;
+  color: currentColor;
+  font-size: 1.04rem;
+  text-transform: uppercase;
+}
+
+.profileSlot small {
+  color: #b7a26f;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.queueMeter {
+  height: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(240, 185, 77, 0.42);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.queueMeter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1b755e, #f0b94d);
+  box-shadow: 0 0 18px rgba(240, 185, 77, 0.4);
+  transition: width 320ms ease;
+}
+
+.queueStatusLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #cfc8b9;
+}
+
+.queueStatusLine strong {
+  color: #fff9ed;
+  text-transform: uppercase;
+}
+
+.queueTimes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.queueTimes div {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid rgba(244, 241, 232, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.queueTimes span {
+  color: #b7b0a2;
+  font-size: 0.86rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.queueTimes strong {
+  color: #fff9ed;
+  font-size: 1.45rem;
 }
 
 .loader {
@@ -443,6 +629,16 @@ button:disabled {
 
   .heroPanel {
     grid-template-columns: 1fr;
+  }
+
+  .summonerSlots,
+  .queueTimes {
+    grid-template-columns: 1fr;
+  }
+
+  .queueStatusLine {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .choiceGrid,
