@@ -7,7 +7,7 @@ import "./styles.css";
 
 type Phase = "landing" | "matching" | "chat" | "identity" | "humanGuess" | "aiGuess" | "reveal";
 type IdentityGuess = "Human" | "AI";
-type ModelFamily = "GPT" | "Claude" | "Gemini" | "Llama" | "Mistral" | "Other";
+type ModelFamily = "ChatGPT" | "Gemini" | "Claude" | "Grok";
 type QueueStatus = "idle" | "searching" | "found";
 
 interface ChatMessage {
@@ -81,8 +81,60 @@ interface IpLocation {
   country: string;
   region: string;
   city: string;
+  lat: number | null;
+  lng: number | null;
   source: "ip";
   updatedAt: number;
+}
+
+interface AdminSnapshot {
+  generatedAt: number;
+  waiting: AdminWaitingEntry[];
+  rooms: AdminRoom[];
+}
+
+interface AdminLocation {
+  country?: string;
+  region?: string;
+  city?: string;
+  lat: number | null;
+  lng: number | null;
+  source?: "ip";
+  updatedAt?: number;
+}
+
+interface AdminWaitingEntry {
+  socketId: string;
+  connected: boolean;
+  queuedAt: number;
+  location: AdminLocation;
+}
+
+interface AdminParticipant {
+  label: string;
+  socketId: string | null;
+  type: IdentityGuess;
+  location?: AdminLocation;
+  modelFamily?: ModelFamily;
+  submitted: boolean;
+  disconnected: boolean;
+}
+
+interface AdminRoom {
+  id: string;
+  mode: "human" | "ai";
+  createdAt: number;
+  chatEndsAt: number;
+  participants: AdminParticipant[];
+  messages: AdminTranscriptMessage[];
+}
+
+interface AdminTranscriptMessage {
+  id: string;
+  author: string;
+  authorLabel: string;
+  text: string;
+  sentAt: number;
 }
 
 const API_URL = resolveServiceUrl(
@@ -93,10 +145,13 @@ const SOCKET_URL = resolveServiceUrl(
   import.meta.env.NEXT_PUBLIC_SOCKET_URL || import.meta.env.VITE_SOCKET_URL || API_URL,
 );
 
-const MODEL_FAMILIES: ModelFamily[] = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
+const MODEL_FAMILIES: ModelFamily[] = ["ChatGPT", "Gemini", "Claude", "Grok"];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
 const LOCATION_CONSENT_STORAGE_KEY = "geoturing:location-consent:v1";
 const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
+const ADMIN_CONSOLE_PATH = "/ops-room-console-7f3a9c";
+const ADMIN_API_PATH = "/admin/ops-room-console-7f3a9c";
+const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
   readEarned: 0,
   readPossible: 0,
@@ -115,6 +170,10 @@ const GUESS_MARKER = L.divIcon({
 });
 
 function App() {
+  return window.location.pathname === ADMIN_CONSOLE_PATH ? <AdminConsole /> : <GameApp />;
+}
+
+function GameApp() {
   const socketRef = useRef<Socket | null>(null);
   const queueStartedAtRef = useRef<number | null>(null);
   const queueTimersRef = useRef<number[]>([]);
@@ -215,13 +274,6 @@ function App() {
     setEstimatedQueueSeconds(8);
     setNow(queuedAt);
 
-    queueTimersRef.current.push(
-      window.setTimeout(() => {
-        setConnectedProfiles(2);
-        setQueueStatus("found");
-      }, QUEUE_FOUND_DELAY_MS),
-    );
-
     socketRef.current?.disconnect();
     const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
@@ -231,7 +283,9 @@ function App() {
 
     socket.on("connect", () => {
       setConnection("connected");
-      socket.emit("queue:join");
+      socket.emit("queue:join", {
+        location: locationConsent ? ipLocation : null,
+      });
     });
 
     socket.on("disconnect", () => {
@@ -255,6 +309,18 @@ function App() {
 
     socket.on("partner:message", (payload: { message: ChatMessage }) => {
       setMessages((current) => [...current, payload.message]);
+    });
+
+    socket.on("partner:left", (payload: { message?: string }) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "Your partner disconnected. You can still make your guess.",
+          sentAt: Date.now(),
+        },
+      ]);
     });
 
     socket.on("session:result", (payload: ResultPayload) => {
@@ -404,10 +470,14 @@ function App() {
       }
 
       const data = await response.json();
+      const lat = toLocationNumber(data.latitude ?? data.lat, -90, 90);
+      const lng = toLocationNumber(data.longitude ?? data.lon ?? data.lng, -180, 180);
       const next: IpLocation = {
         country: String(data.country_name || data.country || "Unknown"),
         region: String(data.region || data.region_code || ""),
         city: String(data.city || ""),
+        lat,
+        lng,
         source: "ip",
         updatedAt: Date.now(),
       };
@@ -478,9 +548,252 @@ function App() {
   );
 }
 
-function StatusPill({ value }: { value: string }) {
+function AdminConsole() {
+  const [password, setPassword] = useState("");
+  const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "");
+  const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState(token ? "Connecting" : "Locked");
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadRooms() {
+      try {
+        const response = await fetch(`${API_URL}${ADMIN_API_PATH}/rooms`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.status === 401) {
+          sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+          setToken("");
+          setSnapshot(null);
+          setStatus("Locked");
+          setError("Admin session expired. Log in again.");
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(`Room snapshot failed with ${response.status}`);
+        }
+
+        const payload = (await response.json()) as AdminSnapshot;
+
+        if (!cancelled) {
+          setSnapshot(payload);
+          setStatus("Live");
+          setError("");
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setStatus("Offline");
+          setError(loadError instanceof Error ? loadError.message : "Could not load rooms.");
+        }
+      }
+    }
+
+    loadRooms();
+    const timer = window.setInterval(loadRooms, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token]);
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setStatus("Checking");
+    setError("");
+
+    try {
+      const response = await fetch(`${API_URL}${ADMIN_API_PATH}/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || `Login failed with ${response.status}`);
+      }
+
+      sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, payload.token);
+      setToken(payload.token);
+      setPassword("");
+      setStatus("Live");
+    } catch (loginError) {
+      setStatus("Locked");
+      setError(loginError instanceof Error ? loginError.message : "Login failed.");
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    setToken("");
+    setSnapshot(null);
+    setStatus("Locked");
+  }
+
   return (
-    <div className={`statusPill ${value === "connected" ? "online" : ""}`}>
+    <main className="appShell adminShell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Operations console</p>
+          <h1>Room monitor</h1>
+        </div>
+        <div className="adminTopActions">
+          <StatusPill value={status} />
+          {token && (
+            <button className="secondaryButton" onClick={logout}>
+              Log out
+            </button>
+          )}
+        </div>
+      </header>
+
+      {!token ? (
+        <section className="centerPanel adminLogin">
+          <p className="roundLabel">Admin login</p>
+          <h2>Enter the monitor password.</h2>
+          <form onSubmit={login}>
+            <input
+              autoComplete="current-password"
+              autoFocus
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Password"
+              type="password"
+              value={password}
+            />
+            <button className="primaryButton" disabled={!password} type="submit">
+              Unlock
+            </button>
+          </form>
+          {error && <p className="adminError">{error}</p>}
+        </section>
+      ) : (
+        <AdminDashboard error={error} snapshot={snapshot} />
+      )}
+    </main>
+  );
+}
+
+function AdminDashboard({ error, snapshot }: { error: string; snapshot: AdminSnapshot | null }) {
+  return (
+    <section className="adminDashboard">
+      <div className="adminSummary">
+        <AdminMetric label="Active rooms" value={snapshot ? snapshot.rooms.length : 0} />
+        <AdminMetric label="Waiting players" value={snapshot ? snapshot.waiting.length : 0} />
+        <AdminMetric label="Last refresh" value={snapshot ? formatTimestamp(snapshot.generatedAt) : "Pending"} />
+      </div>
+
+      {error && <p className="adminError">{error}</p>}
+
+      {snapshot && snapshot.waiting.length > 0 && (
+        <section className="adminPanel">
+          <div className="adminPanelHeader">
+            <p className="roundLabel">Queue</p>
+            <h2>Waiting players</h2>
+          </div>
+          <div className="adminQueueList">
+            {snapshot.waiting.map((entry) => (
+              <div className="adminQueueRow" key={entry.socketId}>
+                <strong>{shortSocketId(entry.socketId)}</strong>
+                <span>{entry.connected ? "Connected" : "Disconnected"}</span>
+                <span>{locationText(entry.location)}</span>
+                <time>{formatTimestamp(entry.queuedAt)}</time>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="adminRooms">
+        {snapshot?.rooms.length ? (
+          snapshot.rooms.map((room) => <AdminRoomCard key={room.id} room={room} />)
+        ) : (
+          <div className="adminPanel emptyRooms">
+            <p className="roundLabel">Rooms</p>
+            <h2>No active rooms.</h2>
+          </div>
+        )}
+      </section>
+    </section>
+  );
+}
+
+function AdminMetric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function AdminRoomCard({ room }: { room: AdminRoom }) {
+  return (
+    <article className="adminPanel roomCard">
+      <div className="adminPanelHeader">
+        <div>
+          <p className="roundLabel">{room.mode === "human" ? "Human room" : "AI room"}</p>
+          <h2>{room.id}</h2>
+        </div>
+        <div className="roomTimes">
+          <span>Created {formatTimestamp(room.createdAt)}</span>
+          <span>Ends {formatTimestamp(room.chatEndsAt)}</span>
+        </div>
+      </div>
+
+      <div className="participantGrid">
+        {room.participants.map((participant) => (
+          <div className="participantCard" key={`${room.id}:${participant.label}`}>
+            <div>
+              <strong>{participant.label}</strong>
+              <span>{participant.type}</span>
+            </div>
+            <small>{participant.socketId ? shortSocketId(participant.socketId) : participant.modelFamily}</small>
+            <small>{participant.location ? locationText(participant.location) : "Model family monitor"}</small>
+            <div className="adminFlags">
+              <span>{participant.submitted ? "Submitted" : "Open"}</span>
+              <span>{participant.disconnected ? "Left" : "Connected"}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="transcript">
+        {room.messages.length ? (
+          room.messages.map((message) => (
+            <div className="transcriptMessage" key={message.id}>
+              <div>
+                <strong>{message.authorLabel}</strong>
+                <time>{formatTimestamp(message.sentAt)}</time>
+              </div>
+              <p>{message.text}</p>
+            </div>
+          ))
+        ) : (
+          <p className="emptyTranscript">No chat messages yet.</p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function StatusPill({ value }: { value: string }) {
+  const statusClass = value.toLowerCase();
+
+  return (
+    <div className={`statusPill ${statusClass === "connected" || statusClass === "live" ? "online" : ""}`}>
       <span />
       {value}
     </div>
@@ -948,6 +1261,36 @@ function formatSeconds(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function formatTimestamp(value: number) {
+  if (!Number.isFinite(value)) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(value);
+}
+
+function shortSocketId(socketId: string) {
+  return socketId.length <= 8 ? socketId : `${socketId.slice(0, 8)}...`;
+}
+
+function locationText(location?: AdminLocation | null) {
+  if (!location) {
+    return "Unknown location";
+  }
+
+  const place = [location.city, location.region, location.country].filter(Boolean).join(", ");
+  const coordinates =
+    Number.isFinite(location.lat) && Number.isFinite(location.lng)
+      ? `${Number(location.lat).toFixed(2)}, ${Number(location.lng).toFixed(2)}`
+      : "";
+
+  return [place, coordinates].filter(Boolean).join(" / ") || "Unknown location";
+}
+
 function resolveServiceUrl(configuredUrl?: string) {
   const fallbackUrl =
     typeof window !== "undefined" && isProductionHost(window.location.hostname)
@@ -1080,6 +1423,8 @@ function loadIpLocation(): IpLocation | null {
       country,
       region: typeof parsed.region === "string" ? parsed.region : "",
       city: typeof parsed.city === "string" ? parsed.city : "",
+      lat: toLocationNumber(parsed.lat, -90, 90),
+      lng: toLocationNumber(parsed.lng, -180, 180),
       source: "ip",
       updatedAt: toScoreNumber(parsed.updatedAt),
     };
@@ -1106,6 +1451,12 @@ function removeIpLocation() {
 
 function toScoreNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+function toLocationNumber(value: unknown, min: number, max: number) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

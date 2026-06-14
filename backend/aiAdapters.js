@@ -1,32 +1,22 @@
-const MODEL_FAMILIES = ["GPT", "Claude", "Gemini", "Llama", "Mistral", "Other"];
+const MODEL_FAMILIES = ["ChatGPT", "Gemini", "Claude", "Grok"];
 
 const AI_PERSONAS = {
-  GPT: [
+  ChatGPT: [
     "yeah, that tracks",
     "i would probably start with the obvious clue",
     "hmm, depends how you read it",
-  ],
-  Claude: [
-    "fair question, i need a second",
-    "i think the vibe is pretty clear",
-    "maybe, but i would not overfit on that",
   ],
   Gemini: [
     "could be, but there is another angle",
     "i am leaning yes on that",
     "that sounds familiar somehow",
   ],
-  Llama: [
-    "lol maybe",
-    "i would guess from the wording",
-    "not totally sure, but close",
+  Claude: [
+    "fair question, i need a second",
+    "i think the vibe is pretty clear",
+    "maybe, but i would not overfit on that",
   ],
-  Mistral: [
-    "short answer: probably",
-    "that feels like the right neighborhood",
-    "i would keep it simple",
-  ],
-  Other: [
+  Grok: [
     "hard to say from just that",
     "i have seen people talk like this",
     "maybe ask one more thing",
@@ -34,7 +24,7 @@ const AI_PERSONAS = {
 };
 
 function createMockAiProvider(modelFamily) {
-  const lines = AI_PERSONAS[modelFamily] || AI_PERSONAS.Other;
+  const lines = AI_PERSONAS[modelFamily] || AI_PERSONAS.ChatGPT;
 
   return {
     modelFamily,
