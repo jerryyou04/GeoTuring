@@ -32,6 +32,11 @@ interface QueueStatusPayload {
   estimatedSeconds: number;
 }
 
+interface QueueErrorPayload {
+  code?: string;
+  message?: string;
+}
+
 interface ResultPayload {
   sessionId: string;
   correctIdentity: boolean;
@@ -255,6 +260,12 @@ function GameApp() {
       return;
     }
 
+    if (!hasValidIpLocation(ipLocation)) {
+      setLocationStatus(ipLocation ? "invalid" : "required");
+      fetchIpLocation();
+      return;
+    }
+
     clearQueueUiTimers();
 
     const queuedAt = Date.now();
@@ -299,6 +310,14 @@ function GameApp() {
       setQueueStartedAt(payload.queuedAt);
       queueStartedAtRef.current = payload.queuedAt;
       setEstimatedQueueSeconds(payload.estimatedSeconds);
+    });
+
+    socket.on("queue:error", (payload: QueueErrorPayload) => {
+      clearQueueUiTimers();
+      socket.disconnect();
+      setPhase("landing");
+      setConnection("idle");
+      setLocationStatus(payload.code === "location_required" ? "invalid" : "unavailable");
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
@@ -481,6 +500,10 @@ function GameApp() {
         source: "ip",
         updatedAt: Date.now(),
       };
+
+      if (!hasValidIpLocation(next)) {
+        throw new Error("IP location lookup returned no coordinates");
+      }
 
       setIpLocation(next);
       saveIpLocation(next);
@@ -815,6 +838,9 @@ function Landing({
   onStart: () => void;
   persistentScore: PersistentScore;
 }) {
+  const hasLocation = hasValidIpLocation(ipLocation);
+  const canUsePrimaryAction = locationConsent && locationStatus !== "checking";
+
   return (
     <section className="heroPanel">
       <div className="heroCopy">
@@ -825,8 +851,8 @@ function Landing({
           make the second guess: place their location on the world map or call
           the model family.
         </p>
-        <button className="primaryButton" disabled={!locationConsent} onClick={onStart}>
-          Start matchmaking
+        <button className="primaryButton" disabled={!canUsePrimaryAction} onClick={onStart}>
+          {locationStatus === "checking" ? "Checking location" : hasLocation ? "Start matchmaking" : "Check location"}
         </button>
       </div>
       <div className="scoreSidebar">
@@ -1328,7 +1354,7 @@ function isProductionHost(hostname: string) {
 }
 
 function getIpLocationStatusText(status: string, agreed: boolean, location: IpLocation | null) {
-  if (location) {
+  if (hasValidIpLocation(location)) {
     const place = [location.city, location.region].filter(Boolean).join(", ");
 
     return place ? `${place}. Estimated from your IP.` : "Estimated from your IP.";
@@ -1343,7 +1369,11 @@ function getIpLocationStatusText(status: string, agreed: boolean, location: IpLo
   }
 
   if (status === "unavailable") {
-    return "IP lookup failed. You can still queue after agreeing.";
+    return "IP lookup failed. Refresh or try again before matchmaking.";
+  }
+
+  if (status === "invalid") {
+    return "Your saved location had no usable coordinates, so it is being checked again.";
   }
 
   return "Location check will run from your network/IP.";
@@ -1419,7 +1449,7 @@ function loadIpLocation(): IpLocation | null {
       return null;
     }
 
-    return {
+    const location = {
       country,
       region: typeof parsed.region === "string" ? parsed.region : "",
       city: typeof parsed.city === "string" ? parsed.city : "",
@@ -1428,6 +1458,8 @@ function loadIpLocation(): IpLocation | null {
       source: "ip",
       updatedAt: toScoreNumber(parsed.updatedAt),
     };
+
+    return hasValidIpLocation(location) ? location : null;
   } catch {
     return null;
   }
@@ -1454,9 +1486,23 @@ function toScoreNumber(value: unknown) {
 }
 
 function toLocationNumber(value: unknown, min: number, max: number) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
   const number = Number(value);
 
   return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
+function hasValidIpLocation(location: IpLocation | AdminLocation | null | undefined) {
+  return Boolean(
+    location &&
+      Number.isFinite(location.lat) &&
+      Number.isFinite(location.lng) &&
+      Math.abs(Number(location.lat)) <= 90 &&
+      Math.abs(Number(location.lng)) <= 180,
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

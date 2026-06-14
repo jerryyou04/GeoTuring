@@ -97,6 +97,14 @@ function addToQueue(socket, payload = {}) {
     fallbackTimer: null,
   };
 
+  if (!hasValidLocation(entry.location)) {
+    socket.emit("queue:error", {
+      code: "location_required",
+      message: "A valid rough IP location is required for human matchmaking.",
+    });
+    return;
+  }
+
   waitingQueue.set(socket.id, entry);
   emitQueueStatus(entry);
   pairWaitingPlayers();
@@ -622,6 +630,10 @@ function sanitizeLocation(value = {}) {
   };
 }
 
+function hasValidLocation(location) {
+  return Number.isFinite(location?.lat) && Number.isFinite(location?.lng);
+}
+
 function sanitizePin(value = {}) {
   const pin = typeof value === "object" && value !== null ? value : {};
   const lat = toFiniteRangeNumber(pin.lat, -90, 90);
@@ -648,6 +660,10 @@ function sanitizeText(value, fallback) {
 }
 
 function toFiniteRangeNumber(value, min, max) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
   const number = Number(value);
 
   if (!Number.isFinite(number) || number < min || number > max) {
