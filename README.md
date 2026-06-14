@@ -45,7 +45,7 @@ Backend:
 - `FRONTEND_URL` - allowed CORS origin, such as `http://localhost:5173` or
   `https://geoturing.com`.
 - `ADMIN_PASSWORD` - required password for the room monitor at
-  `/ops-room-console-7f3a9c`. Admin endpoints are disabled when this is unset.
+  `/host-monitor`. Admin endpoints are disabled when this is unset.
 
 Frontend:
 
@@ -106,14 +106,14 @@ Frontend service:
 
 - `GET /` - basic API status
 - `GET /health` - deployment health check returning `{ "ok": true }`
-- `POST /admin/ops-room-console-7f3a9c/login` - admin login with
+- `POST /admin/host-monitor/login` - admin login with
   `{ "password": "..." }`
-- `GET /admin/ops-room-console-7f3a9c/rooms` - authenticated room, queue, and
+- `GET /admin/host-monitor/rooms` - authenticated room, queue, and
   transcript snapshot
 
 ## Admin Room Monitor
 
-Visit `/ops-room-console-7f3a9c` on the frontend and log in with
+Visit `/host-monitor` on the frontend and log in with
 `ADMIN_PASSWORD`. The monitor shows waiting players, active human/AI rooms,
 participant status, rough locations, and chat transcripts for live testing.
 The obscure path is only for convenience; the backend password check is the

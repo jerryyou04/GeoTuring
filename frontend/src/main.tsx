@@ -154,8 +154,8 @@ const MODEL_FAMILIES: ModelFamily[] = ["ChatGPT", "Gemini", "Claude", "Grok"];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
 const LOCATION_CONSENT_STORAGE_KEY = "geoturing:location-consent:v1";
 const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
-const ADMIN_CONSOLE_PATH = "/ops-room-console-7f3a9c";
-const ADMIN_API_PATH = "/admin/ops-room-console-7f3a9c";
+const ADMIN_CONSOLE_PATH = "/host-monitor";
+const ADMIN_API_PATH = "/admin/host-monitor";
 const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
   readEarned: 0,
