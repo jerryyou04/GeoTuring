@@ -10,8 +10,8 @@ This repo is intentionally small for the MVP:
 - `backend/` - Express + Socket.IO API for Railway at `api.geoturing.com`
 - `frontend/` - Vite React client for Railway at `geoturing.com`
 - In-memory sessions only
-- Mock human and AI opponents only
-- No login, payments, database, Mapbox, or external AI APIs yet
+- Human matchmaking with OpenRouter-backed AI fallback
+- No login, payments, database, or Mapbox yet
 
 ## Local Development
 
@@ -46,6 +46,13 @@ Backend:
   `https://geoturing.com`.
 - `ADMIN_PASSWORD` - required password for the room monitor at
   `/host-monitor`. Admin endpoints are disabled when this is unset.
+- `OPENROUTER_API_KEY` - enables real AI chat opponents through OpenRouter. If
+  unset, the backend falls back to local canned replies for development.
+- `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` - optional OpenRouter app
+  attribution headers.
+- `OPENROUTER_MODEL_CHATGPT`, `OPENROUTER_MODEL_GEMINI`,
+  `OPENROUTER_MODEL_CLAUDE`, `OPENROUTER_MODEL_GROK` - optional model slug
+  overrides for each in-game AI family.
 
 Frontend:
 
@@ -62,7 +69,7 @@ local development.
 - `queue:join` - player enters matchmaking
 - `session:created` - backend returns a new session
 - `chat:message` - player sends a chat message
-- `partner:message` - simulated partner sends a chat message
+- `partner:message` - anonymous human or AI partner sends a chat message
 - `guess:submit` - player submits identity and secondary guess
 - `session:result` - backend returns score and reveal data
 
@@ -87,6 +94,7 @@ Backend service:
 
 - Start command: `npm start`
 - Set `FRONTEND_URL=https://geoturing.com`
+- Set `OPENROUTER_API_KEY` to the backend service variable in Railway.
 - Railway should route `api.geoturing.com` to this service.
 
 Frontend service:
@@ -123,5 +131,3 @@ actual access control.
 
 - Replace simulated human opponents with real human matchmaking.
 - Add persistent game history once the MVP flow is stable.
-- Swap mock AI adapters for real provider-backed adapters when API keys and
-  product rules are ready.

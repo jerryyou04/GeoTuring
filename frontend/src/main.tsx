@@ -24,6 +24,13 @@ interface SessionCreatedPayload {
   intro: string;
 }
 
+interface SessionResumedPayload extends SessionCreatedPayload {
+  messages: ChatMessage[];
+  chatLocked: boolean;
+  finalGuessEndsAt: number | null;
+  submitted: boolean;
+}
+
 interface QueueStatusPayload {
   connectedProfiles: number;
   requiredProfiles: number;
@@ -192,6 +199,8 @@ const MODEL_FAMILIES: ModelFamily[] = ["ChatGPT", "Gemini", "Claude", "Grok"];
 const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
 const LOCATION_CONSENT_STORAGE_KEY = "geoturing:location-consent:v1";
 const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
+const PLAYER_ID_STORAGE_KEY = "geoturing:player-id:v1";
+const ACTIVE_SESSION_STORAGE_KEY = "geoturing:active-session:v1";
 const ADMIN_CONSOLE_PATH = "/host-monitor";
 const ADMIN_API_PATH = "/admin/host-monitor";
 const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
@@ -232,6 +241,7 @@ function App() {
 }
 
 function GameApp() {
+  const playerIdRef = useRef(loadOrCreatePlayerId());
   const socketRef = useRef<Socket | null>(null);
   const queueStartedAtRef = useRef<number | null>(null);
   const queueTimersRef = useRef<number[]>([]);
@@ -305,6 +315,14 @@ function GameApp() {
   }, [locationConsent, ipLocation, locationStatus]);
 
   useEffect(() => {
+    const activeSessionId = loadActiveSessionId();
+
+    if (activeSessionId) {
+      resumeActiveSession(activeSessionId);
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       clearQueueUiTimers();
       socketRef.current?.disconnect();
@@ -314,6 +332,146 @@ function GameApp() {
   function clearQueueUiTimers() {
     queueTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     queueTimersRef.current = [];
+  }
+
+  function resumeActiveSession(activeSessionId: string) {
+    clearQueueUiTimers();
+    setConnection("connecting");
+    socketRef.current?.disconnect();
+
+    const socket = io(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+    });
+
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      setConnection("connected");
+      socket.emit("session:resume", {
+        playerId: playerIdRef.current,
+        sessionId: activeSessionId,
+      });
+    });
+
+    socket.on("disconnect", () => {
+      setConnection("disconnected");
+    });
+
+    socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      saveActiveSessionId(payload.sessionId);
+      enterResumedSession(payload);
+    });
+
+    socket.on("session:resume_failed", () => {
+      removeActiveSessionId();
+      setConnection("idle");
+      setPhase("landing");
+    });
+
+    socket.on("partner:message", (payload: { message: ChatMessage }) => {
+      setMessages((current) => [...current, payload.message]);
+    });
+
+    socket.on("turn:update", (payload: TurnStatePayload) => {
+      setTurnState(payload);
+
+      if (payload.message) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: `${Date.now()}`,
+            author: "system",
+            text: payload.message,
+            sentAt: Date.now(),
+          },
+        ]);
+      }
+    });
+
+    socket.on("chat:error", (payload: ChatErrorPayload) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "Wait for your turn before sending a message.",
+          sentAt: Date.now(),
+        },
+      ]);
+    });
+
+    socket.on("guess:error", (payload: GuessErrorPayload) => {
+      setPendingGuessConfirm(false);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "More messages are required before guessing.",
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase("chat");
+    });
+
+    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number }) => {
+      setPendingGuessConfirm(false);
+      setFinalGuessEndsAt(payload.guessEndsAt || null);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "The chat is locked. Make your final read.",
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase((current) => (current === "waitingGuess" ? current : "identity"));
+    });
+
+    socket.on("guess:submitted", () => {
+      setPhase("waitingGuess");
+    });
+
+    socket.on("partner:left", (payload: { message?: string }) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "Your partner disconnected. You can still make your guess.",
+          sentAt: Date.now(),
+        },
+      ]);
+    });
+
+    socket.on("session:ended", (payload: { message?: string }) => {
+      removeActiveSessionId();
+      const message = payload.message || "This round ended.";
+      setEndMessage(message);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: message,
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase("ended");
+    });
+
+    socket.on("session:result", (payload: ResultPayload) => {
+      recordPersistentScore(payload);
+      setResult(payload);
+      setFinalGuessEndsAt(null);
+      removeActiveSessionId();
+      setPhase("reveal");
+    });
+
+    socket.on("connect_error", () => {
+      setConnection("offline");
+    });
   }
 
   function startMatchmaking() {
@@ -361,6 +519,8 @@ function GameApp() {
     socket.on("connect", () => {
       setConnection("connected");
       socket.emit("queue:join", {
+        playerId: playerIdRef.current,
+        sessionId: loadActiveSessionId(),
         location: locationConsent ? ipLocation : null,
       });
     });
@@ -387,9 +547,19 @@ function GameApp() {
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
+      saveActiveSessionId(payload.sessionId);
       queueTimersRef.current.push(
         window.setTimeout(() => enterChat(payload), getQueueTransitionDelay()),
       );
+    });
+
+    socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      saveActiveSessionId(payload.sessionId);
+      enterResumedSession(payload);
+    });
+
+    socket.on("session:resume_failed", () => {
+      removeActiveSessionId();
     });
 
     socket.on("partner:message", (payload: { message: ChatMessage }) => {
@@ -470,6 +640,7 @@ function GameApp() {
     });
 
     socket.on("session:ended", (payload: { message?: string }) => {
+      removeActiveSessionId();
       const message = payload.message || "This round ended.";
       setEndMessage(message);
       setMessages((current) => [
@@ -488,6 +659,7 @@ function GameApp() {
       recordPersistentScore(payload);
       setResult(payload);
       setFinalGuessEndsAt(null);
+      removeActiveSessionId();
       setPhase("reveal");
     });
 
@@ -564,6 +736,7 @@ function GameApp() {
 
   function restart() {
     clearQueueUiTimers();
+    removeActiveSessionId();
     socketRef.current?.disconnect();
     setPhase("landing");
     setConnection("idle");
@@ -609,6 +782,32 @@ function GameApp() {
     setQueueStatus("found");
     setConnectedProfiles(2);
     setPhase("chat");
+  }
+
+  function enterResumedSession(payload: SessionResumedPayload) {
+    clearQueueUiTimers();
+    setSessionId(payload.sessionId);
+    setChatEndsAt(payload.chatEndsAt);
+    setNow(Date.now());
+    setMessages(
+      payload.messages.length
+        ? payload.messages
+        : [
+            {
+              id: "intro",
+              author: "system",
+              text: payload.intro,
+              sentAt: Date.now(),
+            },
+          ],
+    );
+    setQueueStatus("found");
+    setConnectedProfiles(2);
+    setFinalGuessEndsAt(payload.finalGuessEndsAt || null);
+    setResult(null);
+    setEndMessage("");
+    setPendingGuessConfirm(false);
+    setPhase(payload.chatLocked ? (payload.submitted ? "waitingGuess" : "identity") : "chat");
   }
 
   function recordPersistentScore(payload: ResultPayload) {
@@ -1808,6 +2007,62 @@ function saveLocationConsent(agreed: boolean) {
     window.localStorage.setItem(LOCATION_CONSENT_STORAGE_KEY, String(agreed));
   } catch {
     // The current checkbox state still works if storage is unavailable.
+  }
+}
+
+function loadOrCreatePlayerId() {
+  if (typeof window === "undefined") {
+    return createPlayerId();
+  }
+
+  try {
+    const existing = window.localStorage.getItem(PLAYER_ID_STORAGE_KEY);
+
+    if (existing && /^[a-zA-Z0-9_-]{8,80}$/.test(existing)) {
+      return existing;
+    }
+
+    const next = createPlayerId();
+    window.localStorage.setItem(PLAYER_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return createPlayerId();
+  }
+}
+
+function createPlayerId() {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `player-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+}
+
+function loadActiveSessionId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    return window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveActiveSessionId(sessionId: string) {
+  try {
+    window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+  } catch {
+    // Session resume is best effort when storage is unavailable.
+  }
+}
+
+function removeActiveSessionId() {
+  try {
+    window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {
+    // Nothing else to do if storage is unavailable.
   }
 }
 

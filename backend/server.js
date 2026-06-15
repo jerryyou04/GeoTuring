@@ -5,7 +5,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 const http = require("http");
 const { Server } = require("socket.io");
-const { MODEL_FAMILIES, createMockAiProvider } = require("./aiAdapters");
+const { MODEL_FAMILIES, createAiProvider } = require("./aiAdapters");
 
 const app = express();
 const server = http.createServer(app);
@@ -90,13 +90,28 @@ function addToQueue(socket, payload = {}) {
     return;
   }
 
+  const playerId = sanitizePlayerId(payload.playerId);
+  socket.data.playerId = playerId;
+  const resumableSession = findSessionByPlayerId(playerId, payload.sessionId);
+
+  if (resumableSession) {
+    resumeSession(socket, {
+      playerId,
+      sessionId: resumableSession.id,
+    });
+    return;
+  }
+
   if (waitingQueue.has(socket.id)) {
     emitQueueStatus(waitingQueue.get(socket.id));
     return;
   }
 
+  removeQueuedPlayer(playerId);
+
   const entry = {
     socket,
+    playerId,
     location: sanitizeLocation(payload.location),
     queuedAt: Date.now(),
     fallbackTimer: null,
@@ -131,9 +146,10 @@ function pairWaitingPlayers() {
 
   while (connectedEntries.length >= 2) {
     const first = connectedEntries.shift();
-    const second = connectedEntries.shift();
+    const secondIndex = connectedEntries.findIndex((entry) => entry.playerId !== first?.playerId);
+    const second = secondIndex >= 0 ? connectedEntries.splice(secondIndex, 1)[0] : null;
 
-    if (!first || !second || first.socket.id === second.socket.id) {
+    if (!first || !second || first.socket.id === second.socket.id || first.playerId === second.playerId) {
       continue;
     }
 
@@ -177,6 +193,14 @@ function removeFromQueue(socketId) {
   }
 
   waitingQueue.delete(socketId);
+}
+
+function removeQueuedPlayer(playerId) {
+  for (const [socketId, entry] of waitingQueue.entries()) {
+    if (entry.playerId === playerId) {
+      removeFromQueue(socketId);
+    }
+  }
 }
 
 function createHumanSession(first, second) {
@@ -227,15 +251,17 @@ function createHumanSession(first, second) {
 function createAiSession(socket, playerLocation) {
   const modelFamily = pick(MODEL_FAMILIES);
   const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
+  const playerId = sanitizePlayerId(socket.data.playerId);
   const session = {
     id: cryptoRandomId(),
     mode: "ai",
     playerSocketId: socket.id,
+    playerId,
     playerLocation,
     participant: {
       kind: "AI",
       modelFamily,
-      adapter: createMockAiProvider(modelFamily),
+      adapter: createAiProvider(modelFamily),
     },
     messages: [],
     createdAt: Date.now(),
@@ -281,6 +307,7 @@ function createAiSession(socket, playerLocation) {
 function createHumanSessionPlayer(entry) {
   return {
     socketId: entry.socket.id,
+    playerId: entry.playerId,
     location: entry.location,
     submitted: false,
     disconnected: false,
@@ -563,6 +590,165 @@ function pick(values) {
   return values[Math.floor(Math.random() * values.length)];
 }
 
+function findSessionByPlayerId(playerId, preferredSessionId = "") {
+  if (!playerId) {
+    return null;
+  }
+
+  const preferredSession = preferredSessionId ? sessions.get(preferredSessionId) : null;
+
+  if (isPlayerInSession(preferredSession, playerId)) {
+    return preferredSession;
+  }
+
+  return [...sessions.values()].find((session) => isPlayerInSession(session, playerId) && !session.ended) || null;
+}
+
+function isPlayerInSession(session, playerId) {
+  if (!session || session.ended) {
+    return false;
+  }
+
+  if (session.mode === "human") {
+    return Object.values(session.players).some((player) => player.playerId === playerId);
+  }
+
+  return session.playerId === playerId;
+}
+
+function resumeSession(socket, payload = {}) {
+  const playerId = sanitizePlayerId(payload.playerId);
+  const session = findSessionByPlayerId(playerId, payload.sessionId);
+
+  if (!session) {
+    socket.emit("session:resume_failed", {
+      reason: "not_found",
+    });
+    return;
+  }
+
+  socket.data.playerId = playerId;
+  removeQueuedPlayer(playerId);
+
+  const socketId = reattachSessionSocket(session, playerId, socket);
+
+  if (!socketId) {
+    socket.emit("session:resume_failed", {
+      reason: "not_found",
+    });
+    return;
+  }
+
+  socket.join(session.id);
+  socketSessions.set(socket.id, session.id);
+  socket.emit("session:resumed", buildSessionResumePayload(session, socket.id));
+
+  if (session.chatLocked) {
+    socket.emit("round:locked", {
+      sessionId: session.id,
+      guessEndsAt: session.finalGuessEndsAt,
+      message: "The chat is locked. Make your final read.",
+    });
+  } else {
+    emitTurnState(session);
+  }
+}
+
+function reattachSessionSocket(session, playerId, socket) {
+  if (session.mode === "human") {
+    const oldSocketId = Object.keys(session.players).find((socketId) => session.players[socketId].playerId === playerId);
+
+    if (!oldSocketId) {
+      return null;
+    }
+
+    const player = session.players[oldSocketId];
+    session.messages.forEach((message) => {
+      if (message.author === oldSocketId) {
+        message.author = socket.id;
+      }
+    });
+    io.sockets.sockets.get(oldSocketId)?.leave(session.id);
+    delete session.players[oldSocketId];
+    socketSessions.delete(oldSocketId);
+    session.players[socket.id] = {
+      ...player,
+      socketId: socket.id,
+      disconnected: false,
+    };
+
+    if (session.turnOwner === oldSocketId) {
+      session.turnOwner = socket.id;
+    }
+
+    if (session.timeout?.canActSocketId === oldSocketId) {
+      session.timeout.canActSocketId = socket.id;
+    }
+
+    return socket.id;
+  }
+
+  if (session.playerId !== playerId) {
+    return null;
+  }
+
+  const oldSocketId = session.playerSocketId;
+  io.sockets.sockets.get(oldSocketId)?.leave(session.id);
+  socketSessions.delete(oldSocketId);
+
+  if (session.turnOwner === oldSocketId) {
+    session.turnOwner = socket.id;
+  }
+
+  session.messages.forEach((message) => {
+    if (message.author === oldSocketId) {
+      message.author = socket.id;
+    }
+  });
+
+  session.playerSocketId = socket.id;
+  session.disconnected = false;
+  return socket.id;
+}
+
+function buildSessionResumePayload(session, socketId) {
+  const submitted = session.mode === "human"
+    ? Boolean(session.players[socketId]?.submitted)
+    : Boolean(session.submitted);
+
+  return {
+    sessionId: session.id,
+    chatEndsAt: session.chatEndsAt,
+    chatSeconds: CHAT_SECONDS,
+    intro: "An anonymous participant has joined.",
+    messages: serializeMessagesForSocket(session, socketId),
+    chatLocked: session.chatLocked,
+    finalGuessEndsAt: session.finalGuessEndsAt,
+    submitted,
+  };
+}
+
+function serializeMessagesForSocket(session, socketId) {
+  return session.messages.map((message, index) => ({
+    id: `${session.id}:${index}`,
+    author: getClientMessageAuthor(session, socketId, message.author),
+    text: message.text,
+    sentAt: message.sentAt,
+  }));
+}
+
+function getClientMessageAuthor(session, socketId, author) {
+  if (author === "system") {
+    return "system";
+  }
+
+  if (session.mode === "ai") {
+    return author === "partner" ? "partner" : "player";
+  }
+
+  return author === socketId ? "player" : "partner";
+}
+
 function isSocketInSession(session, socketId) {
   if (!session) {
     return false;
@@ -587,21 +773,33 @@ function startTurn(session, owner) {
   emitTurnState(session);
 
   if (owner === "partner" && session.mode === "ai") {
-    setTimeout(() => sendAiTurnMessage(session.id), 900 + Math.random() * 1800);
+    setTimeout(() => {
+      sendAiTurnMessage(session.id).catch((error) => {
+        console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
+      });
+    }, 900 + Math.random() * 1800);
     return;
   }
 
   session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), TURN_MS);
 }
 
-function sendAiTurnMessage(sessionId) {
+async function sendAiTurnMessage(sessionId) {
   const session = sessions.get(sessionId);
 
   if (!session || session.mode !== "ai" || session.ended || session.turnOwner !== "partner") {
     return;
   }
 
-  const reply = session.participant.adapter.generateReply(session.messages);
+  const reply = await session.participant.adapter.generateReply(session.messages, {
+    sessionId: session.id,
+  });
+  const currentSession = sessions.get(sessionId);
+
+  if (!currentSession || currentSession !== session || session.ended || session.turnOwner !== "partner") {
+    return;
+  }
+
   const message = {
     id: cryptoRandomId(),
     author: "partner",
@@ -932,12 +1130,12 @@ function cleanupSessionIfDone(session) {
 
   if (session.mode === "human") {
     const players = Object.values(session.players);
-    const done = players.every((player) => player.submitted || player.disconnected);
+    const done = players.every((player) => player.submitted);
 
     if (!done) {
       return;
     }
-  } else if (!session.submitted && !session.disconnected) {
+  } else if (!session.submitted) {
     return;
   }
 
@@ -985,6 +1183,16 @@ function sanitizeLocation(value = {}) {
     lng: toFiniteRangeNumber(location.lng, -180, 180),
     source: "ip",
   };
+}
+
+function sanitizePlayerId(value) {
+  if (typeof value !== "string") {
+    return cryptoRandomId();
+  }
+
+  const trimmed = value.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+
+  return trimmed || cryptoRandomId();
 }
 
 function hasValidLocation(location) {
@@ -1150,6 +1358,7 @@ io.on("connection", (socket) => {
 
   socket.on("queue:join", (payload = {}) => addToQueue(socket, payload));
   socket.on("queue:leave", () => removeFromQueue(socket.id));
+  socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
   socket.on("chat:message", (payload = {}) => handleChatMessage(socket, payload));
   socket.on("round:lock", (payload = {}) => handleRoundLock(socket, payload));
   socket.on("guess:submit", (payload = {}) => handleGuessSubmit(socket, payload));
