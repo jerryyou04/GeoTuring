@@ -589,6 +589,39 @@ button:disabled {
   font-weight: 900;
 }
 
+.timerStack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(82px, auto));
+  gap: 8px;
+}
+
+.timerStack div {
+  display: grid;
+  min-height: 54px;
+  align-content: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f1e8;
+  text-align: center;
+}
+
+.timerStack .activeTurn {
+  background: #2da179;
+  color: #07110d;
+}
+
+.timerStack span {
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.timerStack strong {
+  font-size: 1.2rem;
+}
+
 .scoreBadges {
   display: flex;
   flex-wrap: wrap;
@@ -659,10 +692,57 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.chatEndedBanner {
+  padding: 12px 14px;
+  border: 1px solid rgba(240, 185, 77, 0.34);
+  border-radius: 8px;
+  background: rgba(240, 185, 77, 0.12);
+  color: #ffe0a0;
+  font-weight: 800;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 10px;
+}
+
+.endedComposer {
+  grid-template-columns: auto;
+  justify-content: start;
+}
+
+.endedComposer .primaryButton {
+  margin-top: 0;
+}
+
+.chatControls {
+  display: grid;
+  gap: 10px;
+}
+
+.guessConfirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(240, 185, 77, 0.38);
+  border-radius: 8px;
+  background: rgba(240, 185, 77, 0.13);
+  color: #ffe0a0;
+  font-weight: 800;
+}
+
+.guessConfirm div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.guessConfirm .primaryButton {
+  margin-top: 0;
 }
 
 .composer input {
@@ -678,6 +758,10 @@ button:disabled {
 
 .composer input:focus {
   border-color: rgba(141, 224, 189, 0.65);
+}
+
+.composer input:disabled {
+  color: #8d8678;
 }
 
 .composer button[type="submit"] {
@@ -722,6 +806,10 @@ button:disabled {
 
 .choiceGrid small {
   color: #b7b0a2;
+}
+
+.finalGuessPanel {
+  min-height: 220px;
 }
 
 .guessMapShell {
@@ -847,6 +935,39 @@ button:disabled {
 
 .explanation {
   margin: 0;
+}
+
+.opponentGuess {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(280px, 1fr);
+  gap: 14px;
+  align-items: stretch;
+  padding: 14px;
+  border: 1px solid rgba(244, 241, 232, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.opponentGuess > div:first-child {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+}
+
+.opponentGuess strong {
+  color: #fff9ed;
+  font-size: 1.35rem;
+}
+
+.opponentGuess span {
+  color: #cfc8b9;
+}
+
+.opponentGuessMap {
+  min-height: 220px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #14211f;
 }
 
 .adminShell {
@@ -1095,7 +1216,8 @@ button:disabled {
   .choiceGrid.two,
   .revealGrid,
   .adminSummary,
-  .participantGrid {
+  .participantGrid,
+  .opponentGuess {
     grid-template-columns: 1fr;
   }
 
@@ -1107,9 +1229,14 @@ button:disabled {
   .mapFooter,
   .revealTop,
   .adminPanelHeader,
-  .adminTopActions {
+  .adminTopActions,
+  .guessConfirm {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .guessConfirm div {
+    justify-content: stretch;
   }
 
   .adminLogin form,

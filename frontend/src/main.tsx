@@ -5,7 +5,7 @@ import { io, Socket } from "socket.io-client";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
 
-type Phase = "landing" | "matching" | "chat" | "identity" | "humanGuess" | "aiGuess" | "reveal";
+type Phase = "landing" | "matching" | "chat" | "identity" | "humanGuess" | "aiGuess" | "waitingGuess" | "reveal" | "ended";
 type IdentityGuess = "Human" | "AI";
 type ModelFamily = "ChatGPT" | "Gemini" | "Claude" | "Grok";
 type QueueStatus = "idle" | "searching" | "found";
@@ -37,6 +37,35 @@ interface QueueErrorPayload {
   message?: string;
 }
 
+interface ChatErrorPayload {
+  code?: string;
+  message?: string;
+  retryAt?: number;
+}
+
+interface GuessErrorPayload {
+  code?: string;
+  message?: string;
+  counts?: MessageCounts;
+  required?: number;
+}
+
+interface MessageCounts {
+  player: number;
+  partner: number;
+}
+
+interface TurnStatePayload {
+  sessionId: string;
+  currentTurn: "player" | "partner" | "paused";
+  turnEndsAt: number | null;
+  canGuessEarly: boolean;
+  canAbort: boolean;
+  message?: string;
+  counts: MessageCounts;
+  required: number;
+}
+
 interface ResultPayload {
   sessionId: string;
   correctIdentity: boolean;
@@ -53,10 +82,12 @@ interface ResultPayload {
   };
   distanceKm: number | null;
   guess: {
-    identityGuess: IdentityGuess;
+    identityGuess: IdentityGuess | null;
     locationGuess: Pin | null;
     modelFamilyGuess: ModelFamily | null;
+    submitted: boolean;
   };
+  opponentGuess: SubmittedGuess | null;
   actual: {
     participantType: IdentityGuess;
     region?: string;
@@ -66,6 +97,13 @@ interface ResultPayload {
     modelFamily?: ModelFamily;
   };
   explanation: string;
+}
+
+interface SubmittedGuess {
+  identityGuess: IdentityGuess | null;
+  locationGuess: Pin | null;
+  modelFamilyGuess: ModelFamily | null;
+  submitted: boolean;
 }
 
 interface Pin {
@@ -157,6 +195,21 @@ const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
 const ADMIN_CONSOLE_PATH = "/host-monitor";
 const ADMIN_API_PATH = "/admin/host-monitor";
 const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
+const MIN_MESSAGES_PER_SIDE = 2;
+const TURN_SECONDS = 15;
+const FINAL_GUESS_SECONDS = 25;
+const EMPTY_TURN_STATE: TurnStatePayload = {
+  sessionId: "",
+  currentTurn: "paused",
+  turnEndsAt: null,
+  canGuessEarly: false,
+  canAbort: false,
+  counts: {
+    player: 0,
+    partner: 0,
+  },
+  required: MIN_MESSAGES_PER_SIDE,
+};
 const EMPTY_PERSISTENT_SCORE: PersistentScore = {
   readEarned: 0,
   readPossible: 0,
@@ -193,6 +246,10 @@ function GameApp() {
   const [pin, setPin] = useState<Pin | null>(null);
   const [modelGuess, setModelGuess] = useState<ModelFamily | null>(null);
   const [result, setResult] = useState<ResultPayload | null>(null);
+  const [endMessage, setEndMessage] = useState("");
+  const [turnState, setTurnState] = useState<TurnStatePayload>(EMPTY_TURN_STATE);
+  const [pendingGuessConfirm, setPendingGuessConfirm] = useState(false);
+  const [finalGuessEndsAt, setFinalGuessEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [queueStatus, setQueueStatus] = useState<QueueStatus>("idle");
   const [connectedProfiles, setConnectedProfiles] = useState(0);
@@ -220,21 +277,26 @@ function GameApp() {
     return Math.max(0, Math.floor((now - queueStartedAt) / 1000));
   }, [now, queueStartedAt]);
 
+  const chatCounts = turnState.counts || getVisibleMessageCounts(messages);
+  const canGuess = chatCounts.player >= MIN_MESSAGES_PER_SIDE && chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
+  const isPlayerTurn = phase === "chat" && turnState.currentTurn === "player";
+  const isFinalGuessPhase = phase === "identity" || phase === "humanGuess" || phase === "aiGuess" || phase === "waitingGuess";
+  const turnSecondsLeft = turnState.turnEndsAt
+    ? Math.max(0, Math.ceil((turnState.turnEndsAt - now) / 1000))
+    : TURN_SECONDS;
+  const finalGuessSecondsLeft = finalGuessEndsAt
+    ? Math.max(0, Math.ceil((finalGuessEndsAt - now) / 1000))
+    : FINAL_GUESS_SECONDS;
+
   useEffect(() => {
-    if (phase !== "chat" && phase !== "matching") {
+    if (phase !== "chat" && phase !== "matching" && !isFinalGuessPhase) {
       return;
     }
 
     const timer = window.setInterval(() => setNow(Date.now()), 500);
 
     return () => window.clearInterval(timer);
-  }, [phase]);
-
-  useEffect(() => {
-    if (phase === "chat" && chatEndsAt && secondsLeft === 0) {
-      setPhase("identity");
-    }
-  }, [chatEndsAt, phase, secondsLeft]);
+  }, [isFinalGuessPhase, phase]);
 
   useEffect(() => {
     if (locationConsent && !ipLocation && locationStatus === "idle") {
@@ -273,6 +335,10 @@ function GameApp() {
     setPhase("matching");
     setConnection("connecting");
     setResult(null);
+    setEndMessage("");
+    setTurnState(EMPTY_TURN_STATE);
+    setPendingGuessConfirm(false);
+    setFinalGuessEndsAt(null);
     setIdentityGuess(null);
     setPin(null);
     setModelGuess(null);
@@ -330,6 +396,67 @@ function GameApp() {
       setMessages((current) => [...current, payload.message]);
     });
 
+    socket.on("turn:update", (payload: TurnStatePayload) => {
+      setTurnState(payload);
+
+      if (payload.message) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: `${Date.now()}`,
+            author: "system",
+            text: payload.message,
+            sentAt: Date.now(),
+          },
+        ]);
+      }
+    });
+
+    socket.on("chat:error", (payload: ChatErrorPayload) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "Wait for your turn before sending a message.",
+          sentAt: Date.now(),
+        },
+      ]);
+    });
+
+    socket.on("guess:error", (payload: GuessErrorPayload) => {
+      setPendingGuessConfirm(false);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "More messages are required before guessing.",
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase("chat");
+    });
+
+    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number }) => {
+      setPendingGuessConfirm(false);
+      setFinalGuessEndsAt(payload.guessEndsAt || null);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: payload.message || "The chat is locked. Make your final read.",
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase("identity");
+    });
+
+    socket.on("guess:submitted", () => {
+      setPhase("waitingGuess");
+    });
+
     socket.on("partner:left", (payload: { message?: string }) => {
       setMessages((current) => [
         ...current,
@@ -342,9 +469,25 @@ function GameApp() {
       ]);
     });
 
+    socket.on("session:ended", (payload: { message?: string }) => {
+      const message = payload.message || "This round ended.";
+      setEndMessage(message);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}`,
+          author: "system",
+          text: message,
+          sentAt: Date.now(),
+        },
+      ]);
+      setPhase("ended");
+    });
+
     socket.on("session:result", (payload: ResultPayload) => {
       recordPersistentScore(payload);
       setResult(payload);
+      setFinalGuessEndsAt(null);
       setPhase("reveal");
     });
 
@@ -358,7 +501,7 @@ function GameApp() {
 
     const text = draft.trim();
 
-    if (!text || !sessionId || phase !== "chat") {
+    if (!text || !sessionId || phase !== "chat" || !isPlayerTurn) {
       return;
     }
 
@@ -383,6 +526,28 @@ function GameApp() {
     setPhase(value === "Human" ? "humanGuess" : "aiGuess");
   }
 
+  function requestGuess() {
+    if (!canGuess) {
+      return;
+    }
+
+    setPendingGuessConfirm(true);
+  }
+
+  function confirmGuessLock() {
+    if (!sessionId || !canGuess) {
+      return;
+    }
+
+    socketRef.current?.emit("round:lock", {
+      sessionId,
+    });
+  }
+
+  function cancelGuessLock() {
+    setPendingGuessConfirm(false);
+  }
+
   function submitGuess(nextModelGuess = modelGuess) {
     if (!identityGuess || !sessionId) {
       return;
@@ -394,6 +559,7 @@ function GameApp() {
       locationGuess: identityGuess === "Human" ? pin : null,
       modelFamilyGuess: identityGuess === "AI" ? nextModelGuess : null,
     });
+    setPhase("waitingGuess");
   }
 
   function restart() {
@@ -409,6 +575,10 @@ function GameApp() {
     setPin(null);
     setModelGuess(null);
     setResult(null);
+    setEndMessage("");
+    setTurnState(EMPTY_TURN_STATE);
+    setPendingGuessConfirm(false);
+    setFinalGuessEndsAt(null);
     setQueueStatus("idle");
     setConnectedProfiles(0);
     setRequiredProfiles(2);
@@ -542,14 +712,27 @@ function GameApp() {
           status={queueStatus}
         />
       )}
-      {phase === "chat" && (
+      {(phase === "chat" || phase === "ended" || isFinalGuessPhase) && (
         <ChatRoom
+          canGuess={phase === "chat" && canGuess}
+          counts={chatCounts}
           draft={draft}
+          endMessage={endMessage}
+          finalGuessSecondsLeft={finalGuessSecondsLeft}
+          isEnded={phase === "ended"}
+          isLocked={isFinalGuessPhase}
+          isPlayerTurn={phase === "chat" && isPlayerTurn}
           messages={messages}
+          pendingGuessConfirm={phase === "chat" && pendingGuessConfirm}
           secondsLeft={secondsLeft}
+          turnSecondsLeft={turnSecondsLeft}
+          turnState={turnState}
+          onCancelGuess={cancelGuessLock}
+          onConfirmGuess={confirmGuessLock}
           onDraft={setDraft}
           onSend={sendMessage}
-          onGuess={() => setPhase("identity")}
+          onGuess={requestGuess}
+          onRestart={restart}
         />
       )}
       {phase === "identity" && <IdentityGuessScreen onPick={chooseIdentity} />}
@@ -566,6 +749,7 @@ function GameApp() {
           }}
         />
       )}
+      {phase === "waitingGuess" && <WaitingGuessScreen secondsLeft={finalGuessSecondsLeft} />}
       {phase === "reveal" && result && <Reveal result={result} onRestart={restart} />}
     </main>
   );
@@ -1010,20 +1194,62 @@ function ProfileSlot({ active, label }: { active: boolean; label: string }) {
 }
 
 function ChatRoom({
+  canGuess,
+  counts,
   messages,
   draft,
+  endMessage,
+  finalGuessSecondsLeft,
+  isEnded,
+  isLocked,
+  isPlayerTurn,
+  pendingGuessConfirm,
   secondsLeft,
+  turnSecondsLeft,
+  turnState,
+  onCancelGuess,
+  onConfirmGuess,
   onDraft,
   onSend,
   onGuess,
+  onRestart,
 }: {
+  canGuess: boolean;
+  counts: MessageCounts;
   messages: ChatMessage[];
   draft: string;
+  endMessage: string;
+  finalGuessSecondsLeft: number;
+  isEnded: boolean;
+  isLocked: boolean;
+  isPlayerTurn: boolean;
+  pendingGuessConfirm: boolean;
   secondsLeft: number;
+  turnSecondsLeft: number;
+  turnState: TurnStatePayload;
+  onCancelGuess: () => void;
+  onConfirmGuess: () => void;
   onDraft: (value: string) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
   onGuess: () => void;
+  onRestart: () => void;
 }) {
+  const canSend = draft.trim().length > 0 && isPlayerTurn && !isEnded && !isLocked;
+  const guessLabel = canGuess
+    ? "Guess"
+    : `Guess ${Math.min(counts.player, MIN_MESSAGES_PER_SIDE)}/${MIN_MESSAGES_PER_SIDE} ${Math.min(
+        counts.partner,
+        MIN_MESSAGES_PER_SIDE,
+      )}/${MIN_MESSAGES_PER_SIDE}`;
+  const turnLabel =
+    turnState.currentTurn === "player"
+      ? "Your turn"
+      : turnState.currentTurn === "partner"
+        ? "Their turn"
+        : turnState.canAbort
+          ? "Ready"
+          : "Waiting";
+
   return (
     <section className="gamePanel chatLayout">
       <div className="chatHeader">
@@ -1031,8 +1257,19 @@ function ChatRoom({
           <p className="roundLabel">Anonymous chat</p>
           <h2>Find the tell.</h2>
         </div>
-        <div className="timer">{formatSeconds(secondsLeft)}</div>
+        <div className="timerStack">
+          <div>
+            <span>Round</span>
+            <strong>{formatSeconds(secondsLeft)}</strong>
+          </div>
+          <div className={isPlayerTurn ? "activeTurn" : ""}>
+            <span>{isEnded ? "Ended" : isLocked ? "Guess" : turnLabel}</span>
+            <strong>{isEnded ? "--" : isLocked ? `${finalGuessSecondsLeft}s` : turnState.currentTurn === "paused" ? "--" : `${turnSecondsLeft}s`}</strong>
+          </div>
+        </div>
       </div>
+
+      {isEnded && <div className="chatEndedBanner">{endMessage || "This round ended."}</div>}
 
       <div className="messages" aria-live="polite">
         {messages.map((message) => (
@@ -1042,18 +1279,46 @@ function ChatRoom({
         ))}
       </div>
 
-      <form className="composer" onSubmit={onSend}>
-        <input
-          maxLength={400}
-          value={draft}
-          onChange={(event) => onDraft(event.target.value)}
-          placeholder="Ask something revealing..."
-        />
-        <button type="submit">Send</button>
-        <button className="secondaryButton" type="button" onClick={onGuess}>
-          Guess
-        </button>
-      </form>
+      {isEnded ? (
+        <div className="composer endedComposer">
+          <button className="primaryButton" type="button" onClick={onRestart}>
+            Play again
+          </button>
+        </div>
+      ) : isLocked ? (
+        <div className="chatEndedBanner">Chat locked. Use the final guess below.</div>
+      ) : (
+        <div className="chatControls">
+          {pendingGuessConfirm && (
+            <div className="guessConfirm">
+              <span>Lock chat and make final guesses?</span>
+              <div>
+                <button className="secondaryButton" type="button" onClick={onCancelGuess}>
+                  Cancel
+                </button>
+                <button className="primaryButton" type="button" onClick={onConfirmGuess}>
+                  Lock round
+                </button>
+              </div>
+            </div>
+          )}
+          <form className="composer" onSubmit={onSend}>
+            <input
+              disabled={!isPlayerTurn}
+              maxLength={400}
+              value={draft}
+              onChange={(event) => onDraft(event.target.value)}
+              placeholder={isPlayerTurn ? "Ask something revealing..." : "Waiting for their message..."}
+            />
+            <button disabled={!canSend} type="submit">
+              Send
+            </button>
+            <button className="secondaryButton" disabled={!canGuess} type="button" onClick={onGuess}>
+              {guessLabel}
+            </button>
+          </form>
+        </div>
+      )}
     </section>
   );
 }
@@ -1224,6 +1489,16 @@ function AiGuessScreen({
   );
 }
 
+function WaitingGuessScreen({ secondsLeft }: { secondsLeft: number }) {
+  return (
+    <section className="centerPanel finalGuessPanel">
+      <p className="roundLabel">Final read locked</p>
+      <h2>Waiting for opponent's guess.</h2>
+      <p>{secondsLeft}s left before missing guesses are scored as zero.</p>
+    </section>
+  );
+}
+
 function Reveal({ result, onRestart }: { result: ResultPayload; onRestart: () => void }) {
   const actual =
     result.actual.participantType === "Human"
@@ -1259,16 +1534,84 @@ function Reveal({ result, onRestart }: { result: ResultPayload; onRestart: () =>
       </div>
       <div className="revealGrid">
         <ResultStat label="Actual" value={`${result.actual.participantType}: ${actual}`} />
-        <ResultStat label="Your read" value={result.guess.identityGuess} />
+        <ResultStat label="Your read" value={result.guess.identityGuess || "No guess"} />
         <ResultStat label={roundLabel} value={`${result.score.round.earned}/${result.score.round.possible}`} />
         <ResultStat label="Round detail" value={roundDetail} />
       </div>
+      <OpponentGuess guess={result.opponentGuess} />
       <p className="explanation">{result.explanation}</p>
       <button className="primaryButton" onClick={onRestart}>
         Play again
       </button>
     </section>
   );
+}
+
+function OpponentGuess({ guess }: { guess: SubmittedGuess | null }) {
+  if (!guess) {
+    return null;
+  }
+
+  const label = guess.submitted ? guess.identityGuess || "No guess" : "No guess";
+  const detail =
+    guess.identityGuess === "Human"
+      ? guess.locationGuess
+        ? `${guess.locationGuess.lat.toFixed(2)}, ${guess.locationGuess.lng.toFixed(2)}`
+        : "No location pin"
+      : guess.identityGuess === "AI"
+        ? guess.modelFamilyGuess || "No model family"
+        : "Timed out";
+
+  return (
+    <div className="opponentGuess">
+      <div>
+        <p className="roundLabel">Opponent guess</p>
+        <strong>{label}</strong>
+        <span>{detail}</span>
+      </div>
+      {guess.identityGuess === "Human" && guess.locationGuess && <GuessPreviewMap pin={guess.locationGuess} />}
+    </div>
+  );
+}
+
+function GuessPreviewMap({ pin }: { pin: Pin }) {
+  const mapElementRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!mapElementRef.current || mapRef.current) {
+      return;
+    }
+
+    const map = L.map(mapElementRef.current, {
+      center: [pin.lat, pin.lng],
+      zoom: 4,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false,
+      tap: false,
+    });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+    }).addTo(map);
+    L.marker([pin.lat, pin.lng], {
+      icon: GUESS_MARKER,
+    }).addTo(map);
+    mapRef.current = map;
+    window.setTimeout(() => map.invalidateSize(), 0);
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [pin.lat, pin.lng]);
+
+  return <div className="opponentGuessMap" ref={mapElementRef} />;
 }
 
 function ResultStat({ label, value }: { label: string; value: string }) {
@@ -1285,6 +1628,13 @@ function formatSeconds(totalSeconds: number) {
   const seconds = totalSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function getVisibleMessageCounts(messages: ChatMessage[]): MessageCounts {
+  return {
+    player: messages.filter((message) => message.author === "player").length,
+    partner: messages.filter((message) => message.author === "partner").length,
+  };
 }
 
 function formatTimestamp(value: number) {

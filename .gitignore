@@ -7,3 +7,4 @@ dist/
 build/
 coverage/
 npm-debug.log*
+local-dev.*.log
