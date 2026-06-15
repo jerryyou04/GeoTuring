@@ -735,12 +735,19 @@ function GameApp() {
           onRestart={restart}
         />
       )}
-      {phase === "identity" && <IdentityGuessScreen onPick={chooseIdentity} />}
+      {phase === "identity" && <IdentityGuessScreen secondsLeft={finalGuessSecondsLeft} onPick={chooseIdentity} />}
       {phase === "humanGuess" && (
-        <HumanGuessScreen pin={pin} onPin={setPin} onBack={() => setPhase("identity")} onSubmit={() => submitGuess()} />
+        <HumanGuessScreen
+          pin={pin}
+          secondsLeft={finalGuessSecondsLeft}
+          onPin={setPin}
+          onBack={() => setPhase("identity")}
+          onSubmit={() => submitGuess()}
+        />
       )}
       {phase === "aiGuess" && (
         <AiGuessScreen
+          secondsLeft={finalGuessSecondsLeft}
           selected={modelGuess}
           onBack={() => setPhase("identity")}
           onPick={(family) => {
@@ -1323,11 +1330,25 @@ function ChatRoom({
   );
 }
 
-function IdentityGuessScreen({ onPick }: { onPick: (value: IdentityGuess) => void }) {
+function FinalGuessTimer({ secondsLeft }: { secondsLeft: number }) {
+  return (
+    <div className="finalGuessTimer" aria-label={`${secondsLeft} seconds left to guess`}>
+      <span>Guess timer</span>
+      <strong>{secondsLeft}s</strong>
+    </div>
+  );
+}
+
+function IdentityGuessScreen({ secondsLeft, onPick }: { secondsLeft: number; onPick: (value: IdentityGuess) => void }) {
   return (
     <section className="centerPanel">
-      <p className="roundLabel">First guess</p>
-      <h2>Who were you talking to?</h2>
+      <div className="finalGuessHeader">
+        <div>
+          <p className="roundLabel">First guess</p>
+          <h2>Who were you talking to?</h2>
+        </div>
+        <FinalGuessTimer secondsLeft={secondsLeft} />
+      </div>
       <div className="choiceGrid two">
         <button onClick={() => onPick("Human")}>
           <span>Human</span>
@@ -1344,11 +1365,13 @@ function IdentityGuessScreen({ onPick }: { onPick: (value: IdentityGuess) => voi
 
 function HumanGuessScreen({
   pin,
+  secondsLeft,
   onPin,
   onBack,
   onSubmit,
 }: {
   pin: Pin | null;
+  secondsLeft: number;
   onPin: (pin: Pin) => void;
   onBack: () => void;
   onSubmit: () => void;
@@ -1360,9 +1383,12 @@ function HumanGuessScreen({
           <p className="roundLabel">Human read</p>
           <h2>Place the origin pin.</h2>
         </div>
-        <button className="secondaryButton" onClick={onBack}>
-          Back
-        </button>
+        <div className="guessHeaderActions">
+          <FinalGuessTimer secondsLeft={secondsLeft} />
+          <button className="secondaryButton" onClick={onBack}>
+            Back
+          </button>
+        </div>
       </div>
 
       <GuessMap pin={pin} onPin={onPin} />
@@ -1458,10 +1484,12 @@ function GuessMap({ pin, onPin }: { pin: Pin | null; onPin: (pin: Pin) => void }
 }
 
 function AiGuessScreen({
+  secondsLeft,
   selected,
   onPick,
   onBack,
 }: {
+  secondsLeft: number;
   selected: ModelFamily | null;
   onPick: (family: ModelFamily) => void;
   onBack: () => void;
@@ -1473,9 +1501,12 @@ function AiGuessScreen({
           <p className="roundLabel">AI read</p>
           <h2>Pick the model family.</h2>
         </div>
-        <button className="secondaryButton" onClick={onBack}>
-          Back
-        </button>
+        <div className="guessHeaderActions">
+          <FinalGuessTimer secondsLeft={secondsLeft} />
+          <button className="secondaryButton" onClick={onBack}>
+            Back
+          </button>
+        </div>
       </div>
       <div className="choiceGrid">
         {MODEL_FAMILIES.map((family) => (
