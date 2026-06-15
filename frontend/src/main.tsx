@@ -771,14 +771,17 @@ function GameApp() {
     setSessionId(payload.sessionId);
     setChatEndsAt(payload.chatEndsAt);
     setNow(Date.now());
-    setMessages([
-      {
+    setMessages((current) => {
+      const introMessage: ChatMessage = {
         id: "intro",
         author: "system",
         text: payload.intro,
         sentAt: Date.now(),
-      },
-    ]);
+      };
+      const earlyMessages = current.filter((message) => message.id !== introMessage.id);
+
+      return [introMessage, ...earlyMessages];
+    });
     setQueueStatus("found");
     setConnectedProfiles(2);
     setPhase("chat");
@@ -1455,6 +1458,16 @@ function ChatRoom({
         : turnState.canAbort
           ? "Ready"
           : "Waiting";
+  const turnClockLabel = isEnded
+    ? "--"
+    : isLocked
+      ? `${finalGuessSecondsLeft}s`
+      : turnState.currentTurn === "paused"
+        ? "--"
+        : turnState.currentTurn === "partner" && !turnState.turnEndsAt
+          ? "..."
+          : `${turnSecondsLeft}s`;
+  const showPartnerTyping = !isEnded && !isLocked && turnState.currentTurn === "partner";
 
   return (
     <section className="gamePanel chatLayout">
@@ -1470,7 +1483,7 @@ function ChatRoom({
           </div>
           <div className={isPlayerTurn ? "activeTurn" : ""}>
             <span>{isEnded ? "Ended" : isLocked ? "Guess" : turnLabel}</span>
-            <strong>{isEnded ? "--" : isLocked ? `${finalGuessSecondsLeft}s` : turnState.currentTurn === "paused" ? "--" : `${turnSecondsLeft}s`}</strong>
+            <strong>{turnClockLabel}</strong>
           </div>
         </div>
       </div>
@@ -1483,6 +1496,13 @@ function ChatRoom({
             {message.text}
           </div>
         ))}
+        {showPartnerTyping && (
+          <div className="message partner typingBubble" aria-label="Their turn, typing">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
       </div>
 
       {isEnded ? (

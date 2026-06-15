@@ -48,6 +48,8 @@ const GUESS_GRACE_SECONDS = 300;
 const MIN_MESSAGES_PER_SIDE = 2;
 const TURN_SECONDS = 15;
 const TURN_MS = TURN_SECONDS * 1000;
+const AI_TYPING_MIN_MS = 1800;
+const AI_TYPING_MAX_MS = 3600;
 const FINAL_GUESS_SECONDS = 25;
 const FINAL_GUESS_MS = FINAL_GUESS_SECONDS * 1000;
 const ADMIN_API_PATH = "/admin/host-monitor";
@@ -777,7 +779,7 @@ function startTurn(session, owner) {
       sendAiTurnMessage(session.id).catch((error) => {
         console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
       });
-    }, 900 + Math.random() * 1800);
+    }, getAiTypingDelay(session));
     return;
   }
 
@@ -818,6 +820,14 @@ async function sendAiTurnMessage(sessionId) {
     message,
   });
   startTurn(session, session.playerSocketId);
+}
+
+function getAiTypingDelay(session) {
+  const range = AI_TYPING_MAX_MS - AI_TYPING_MIN_MS;
+  const baseDelay = AI_TYPING_MIN_MS + Math.random() * range;
+  const openingMessageDelay = session.messages.length === 0 ? 900 : 0;
+
+  return baseDelay + openingMessageDelay;
 }
 
 function handleTurnTimeout(sessionId, owner) {

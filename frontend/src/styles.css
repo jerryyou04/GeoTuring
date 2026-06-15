@@ -684,6 +684,45 @@ button:disabled {
   color: #fff9ed;
 }
 
+.typingBubble {
+  display: inline-flex;
+  width: 58px;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.typingBubble span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 249, 237, 0.78);
+  animation: typingPulse 1s infinite ease-in-out;
+}
+
+.typingBubble span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.typingBubble span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes typingPulse {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.42;
+  }
+
+  35% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
 .message.system {
   align-self: center;
   border: 1px solid rgba(141, 224, 189, 0.28);
