@@ -250,8 +250,8 @@ function createHumanSession(first, second) {
   return session;
 }
 
-function createAiSession(socket, playerLocation) {
-  const modelFamily = pick(MODEL_FAMILIES);
+function createAiSession(socket, playerLocation, requestedModelFamily = null) {
+  const modelFamily = MODEL_FAMILIES.includes(requestedModelFamily) ? requestedModelFamily : pick(MODEL_FAMILIES);
   const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
   const playerId = sanitizePlayerId(socket.data.playerId);
   const session = {
@@ -304,6 +304,28 @@ function createAiSession(socket, playerLocation) {
   startTurn(session, pick([socket.id, "partner"]));
 
   return session;
+}
+
+function createRequestedAiSession(socket, payload = {}) {
+  if (socketSessions.has(socket.id)) {
+    return;
+  }
+
+  removeFromQueue(socket.id);
+
+  const playerId = sanitizePlayerId(payload.playerId);
+  const location = sanitizeLocation(payload.location);
+  socket.data.playerId = playerId;
+
+  if (!hasValidLocation(location)) {
+    socket.emit("queue:error", {
+      code: "location_required",
+      message: "A valid rough IP location is required for AI testing.",
+    });
+    return;
+  }
+
+  createAiSession(socket, location, payload.modelFamily);
 }
 
 function createHumanSessionPlayer(entry) {
@@ -1367,6 +1389,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("queue:join", (payload = {}) => addToQueue(socket, payload));
+  socket.on("queue:test_ai", (payload = {}) => createRequestedAiSession(socket, payload));
   socket.on("queue:leave", () => removeFromQueue(socket.id));
   socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
   socket.on("chat:message", (payload = {}) => handleChatMessage(socket, payload));

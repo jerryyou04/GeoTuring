@@ -92,6 +92,7 @@ function createOpenRouterAiProvider(modelFamily, persona) {
             model,
             messages: buildOpenRouterMessages(messages, persona),
             max_tokens: OPENROUTER_MAX_TOKENS,
+            ...(modelFamily === "Gemini" ? { reasoning: { effort: "minimal" } } : {}),
             temperature: 0.86,
             top_p: 0.92,
             frequency_penalty: 0.35,

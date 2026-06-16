@@ -245,6 +245,7 @@ function GameApp() {
   const socketRef = useRef<Socket | null>(null);
   const queueStartedAtRef = useRef<number | null>(null);
   const queueTimersRef = useRef<number[]>([]);
+  const hiddenAiRequestPendingRef = useRef(false);
   const scoredSessionsRef = useRef<Set<string>>(new Set());
   const [phase, setPhase] = useState<Phase>("landing");
   const [connection, setConnection] = useState("idle");
@@ -328,6 +329,44 @@ function GameApp() {
       socketRef.current?.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    if (phase !== "matching") {
+      return;
+    }
+
+    function handleHiddenQueueShortcut(event: KeyboardEvent) {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.repeat) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+        return;
+      }
+
+      const shortcuts: Record<string, ModelFamily | "random"> = {
+        "1": "ChatGPT",
+        "2": "Gemini",
+        "3": "Claude",
+        "4": "Grok",
+        "0": "random",
+      };
+      const requested = shortcuts[event.key];
+
+      if (!requested) {
+        return;
+      }
+
+      event.preventDefault();
+      requestImmediateAiMatch(requested === "random" ? null : requested);
+    }
+
+    window.addEventListener("keydown", handleHiddenQueueShortcut);
+
+    return () => window.removeEventListener("keydown", handleHiddenQueueShortcut);
+  }, [phase, ipLocation, locationConsent]);
 
   function clearQueueUiTimers() {
     queueTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -502,6 +541,7 @@ function GameApp() {
     setModelGuess(null);
     setMessages([]);
     setQueueStatus("searching");
+    hiddenAiRequestPendingRef.current = false;
     setConnectedProfiles(1);
     setRequiredProfiles(2);
     setQueueStartedAt(queuedAt);
@@ -539,6 +579,7 @@ function GameApp() {
     });
 
     socket.on("queue:error", (payload: QueueErrorPayload) => {
+      hiddenAiRequestPendingRef.current = false;
       clearQueueUiTimers();
       socket.disconnect();
       setPhase("landing");
@@ -547,6 +588,7 @@ function GameApp() {
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
+      hiddenAiRequestPendingRef.current = false;
       saveActiveSessionId(payload.sessionId);
       queueTimersRef.current.push(
         window.setTimeout(() => enterChat(payload), getQueueTransitionDelay()),
@@ -668,6 +710,25 @@ function GameApp() {
     });
   }
 
+  function requestImmediateAiMatch(modelFamily: ModelFamily | null) {
+    if (phase !== "matching" || hiddenAiRequestPendingRef.current) {
+      return;
+    }
+
+    if (!locationConsent || !hasValidIpLocation(ipLocation)) {
+      setLocationStatus(ipLocation ? "invalid" : "required");
+      return;
+    }
+
+    hiddenAiRequestPendingRef.current = true;
+    clearQueueUiTimers();
+    socketRef.current?.emit("queue:test_ai", {
+      playerId: playerIdRef.current,
+      location: ipLocation,
+      modelFamily,
+    });
+  }
+
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -753,6 +814,7 @@ function GameApp() {
     setPendingGuessConfirm(false);
     setFinalGuessEndsAt(null);
     setQueueStatus("idle");
+    hiddenAiRequestPendingRef.current = false;
     setConnectedProfiles(0);
     setRequiredProfiles(2);
     setQueueStartedAt(null);
