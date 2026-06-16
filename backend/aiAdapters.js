@@ -3,7 +3,7 @@ const MODEL_FAMILIES = ["ChatGPT", "Gemini", "Claude", "Grok"];
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = Number(process.env.OPENROUTER_TIMEOUT_MS || 9000);
 const OPENROUTER_MAX_CONTEXT_MESSAGES = Number(process.env.OPENROUTER_MAX_CONTEXT_MESSAGES || 10);
-const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 70);
+const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 120);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-4o",

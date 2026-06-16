@@ -205,8 +205,8 @@ const ADMIN_CONSOLE_PATH = "/host-monitor";
 const ADMIN_API_PATH = "/admin/host-monitor";
 const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 const MIN_MESSAGES_PER_SIDE = 2;
-const TURN_SECONDS = 15;
-const FINAL_GUESS_SECONDS = 25;
+const TURN_SECONDS = 25;
+const FINAL_GUESS_SECONDS = 30;
 const EMPTY_TURN_STATE: TurnStatePayload = {
   sessionId: "",
   currentTurn: "paused",
@@ -796,13 +796,13 @@ function GameApp() {
       payload.messages.length
         ? payload.messages
         : [
-            {
-              id: "intro",
-              author: "system",
-              text: payload.intro,
-              sentAt: Date.now(),
-            },
-          ],
+          {
+            id: "intro",
+            author: "system",
+            text: payload.intro,
+            sentAt: Date.now(),
+          },
+        ],
     );
     setQueueStatus("found");
     setConnectedProfiles(2);
@@ -1447,9 +1447,9 @@ function ChatRoom({
   const guessLabel = canGuess
     ? "Guess"
     : `Guess ${Math.min(counts.player, MIN_MESSAGES_PER_SIDE)}/${MIN_MESSAGES_PER_SIDE} ${Math.min(
-        counts.partner,
-        MIN_MESSAGES_PER_SIDE,
-      )}/${MIN_MESSAGES_PER_SIDE}`;
+      counts.partner,
+      MIN_MESSAGES_PER_SIDE,
+    )}/${MIN_MESSAGES_PER_SIDE}`;
   const turnLabel =
     turnState.currentTurn === "player"
       ? "Your turn"
@@ -2154,10 +2154,10 @@ function toLocationNumber(value: unknown, min: number, max: number) {
 function hasValidIpLocation(location: IpLocation | AdminLocation | null | undefined) {
   return Boolean(
     location &&
-      Number.isFinite(location.lat) &&
-      Number.isFinite(location.lng) &&
-      Math.abs(Number(location.lat)) <= 90 &&
-      Math.abs(Number(location.lng)) <= 180,
+    Number.isFinite(location.lat) &&
+    Number.isFinite(location.lng) &&
+    Math.abs(Number(location.lat)) <= 90 &&
+    Math.abs(Number(location.lng)) <= 180,
   );
 }
 
