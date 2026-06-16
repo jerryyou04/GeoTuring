@@ -1,12 +1,13 @@
 import type { ModelFamily, PersistentScore, TurnStatePayload } from "./types";
 
 export const MODEL_FAMILIES: ModelFamily[] = ["ChatGPT", "Gemini", "Claude", "Grok"];
-export const SCORE_STORAGE_KEY = "geoturing:scoreboard:v1";
+export const SCORE_STORAGE_KEY = "geoturing:scoreboard:v2";
 export const LOCATION_CONSENT_STORAGE_KEY = "geoturing:location-consent:v1";
 export const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
 export const PLAYER_ID_STORAGE_KEY = "geoturing:player-id:v1";
 export const ACTIVE_SESSION_STORAGE_KEY = "geoturing:active-session:v1";
 export const ADMIN_CONSOLE_PATH = "/host-monitor";
+export const HISTORY_PATH = "/history";
 export const ADMIN_API_PATH = "/admin/host-monitor";
 export const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 export const MIN_MESSAGES_PER_SIDE = 2;

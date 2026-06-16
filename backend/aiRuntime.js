@@ -2,21 +2,54 @@ const {
   AI_SEND_DEADLINE_BUFFER_MS,
   AI_TYPING_MAX_RATIO,
   AI_TYPING_MIN_RATIO,
+  AI_TYPING_WPM,
+  AI_TYPING_WPM_STDDEV,
   TURN_MS,
 } = require("./config");
 const { clamp, randomInt } = require("./utils");
 
+// WPM is measured against the standard of 5 characters per word (incl. spaces).
+const CHARS_PER_WORD = 5;
+
 function getAiTypingDelay(reply) {
   const text = String(reply || "");
   const chars = text.length;
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  const estimatedTypingMs = 850 + chars * 38 + words * 95;
-  const randomMultiplier = 0.72 + Math.random() * 0.58;
-  const randomJitterMs = randomInt(-220, 420);
+
+  // Sample a per-message typing speed centered on the target WPM, so the same
+  // bot is a bit faster or slower from message to message like a real person.
+  const wpm = clamp(randomGaussian(AI_TYPING_WPM, AI_TYPING_WPM_STDDEV), 32, 95);
+  const msPerChar = 60000 / (wpm * CHARS_PER_WORD);
+
+  // Time spent reading the last message and thinking before typing starts...
+  let leadInMs = randomInt(500, 1700);
+
+  // ...and occasionally they get distracted or take a beat longer to reply.
+  if (Math.random() < 0.18) {
+    leadInMs += randomInt(1200, 3500);
+  }
+
+  const estimatedMs = leadInMs + chars * msPerChar;
   const minMs = TURN_MS * AI_TYPING_MIN_RATIO;
   const maxMs = TURN_MS * AI_TYPING_MAX_RATIO;
 
-  return Math.round(clamp(estimatedTypingMs * randomMultiplier + randomJitterMs, minMs, maxMs));
+  return Math.round(clamp(estimatedMs, minMs, maxMs));
+}
+
+function randomGaussian(mean, stdDev) {
+  let u = 0;
+  let v = 0;
+
+  while (u === 0) {
+    u = Math.random();
+  }
+
+  while (v === 0) {
+    v = Math.random();
+  }
+
+  const standardNormal = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+
+  return mean + standardNormal * stdDev;
 }
 
 function getAiSendDelay({ replyText, turnStartedAt, turnEndsAt, now = Date.now() }) {

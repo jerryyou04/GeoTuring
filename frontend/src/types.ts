@@ -88,6 +88,8 @@ export interface ResultPayload {
     submitted: boolean;
   };
   opponentGuess: SubmittedGuess | null;
+  opponentPending?: boolean;
+  opponentGuessEndsAt?: number | null;
   actual: {
     participantType: IdentityGuess;
     region?: string;
@@ -117,6 +119,23 @@ export interface SubmittedGuess {
 export interface Pin {
   lat: number;
   lng: number;
+}
+
+export interface GameHistoryEntry {
+  sessionId: string;
+  playedAt: string;
+  opponentType: IdentityGuess;
+  identityGuess: IdentityGuess | null;
+  correctIdentity: boolean;
+  readEarned: number;
+  readPossible: number;
+  roundType: "location" | "modelFamily";
+  roundEarned: number;
+  roundPossible: number;
+  distanceKm: number | null;
+  modelFamily: ModelFamily | null;
+  actualRegion: string | null;
+  actualCountry: string | null;
 }
 
 export interface PersistentScore {

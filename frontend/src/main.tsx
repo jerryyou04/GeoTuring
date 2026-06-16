@@ -8,6 +8,7 @@ import {
   ADMIN_CONSOLE_PATH,
   EMPTY_TURN_STATE,
   FINAL_GUESS_SECONDS,
+  HISTORY_PATH,
   MATCH_FOUND_HOLD_MS,
   MIN_MESSAGES_PER_SIDE,
   SOCKET_URL,
@@ -51,6 +52,7 @@ import {
 } from "./storage";
 import { AdminConsole } from "./components/AdminConsole";
 import { ChatRoom } from "./components/ChatRoom";
+import { History } from "./components/History";
 import {
   AiGuessScreen,
   HumanGuessScreen,
@@ -63,7 +65,17 @@ import { Reveal } from "./components/Reveal";
 import { StatusPill } from "./components/StatusPill";
 
 function App() {
-  return window.location.pathname === ADMIN_CONSOLE_PATH ? <AdminConsole /> : <GameApp />;
+  const path = window.location.pathname;
+
+  if (path === ADMIN_CONSOLE_PATH) {
+    return <AdminConsole />;
+  }
+
+  if (path === HISTORY_PATH) {
+    return <History />;
+  }
+
+  return <GameApp />;
 }
 
 function GameApp() {
@@ -375,6 +387,12 @@ function GameApp() {
       setPhase("reveal");
     });
 
+    socket.on("opponent:guess", (payload: { opponentGuess: ResultPayload["opponentGuess"] }) => {
+      setResult((current) =>
+        current ? { ...current, opponentGuess: payload.opponentGuess, opponentPending: false } : current,
+      );
+    });
+
     socket.on("connect_error", () => {
       setConnection("offline");
     });
@@ -570,6 +588,12 @@ function GameApp() {
       setFinalGuessEndsAt(null);
       removeActiveSessionId();
       setPhase("reveal");
+    });
+
+    socket.on("opponent:guess", (payload: { opponentGuess: ResultPayload["opponentGuess"] }) => {
+      setResult((current) =>
+        current ? { ...current, opponentGuess: payload.opponentGuess, opponentPending: false } : current,
+      );
     });
 
     socket.on("connect_error", () => {
@@ -833,14 +857,41 @@ function GameApp() {
   }
 
   return (
-    <main className="appShell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">GeoTuring (Preview)</p>
-          <h1>Read the room. Then read the world.</h1>
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <img className="brandMark" src="/geoturing-logo.png" alt="GeoTuring logo" />
+          <div className="brandText">
+            <strong>GeoTuring</strong>
+          </div>
         </div>
-        <StatusPill value={connection} />
-      </header>
+        <nav className="sidebarNav">
+          <button
+            className="navItem primary"
+            type="button"
+            disabled={phase === "landing"}
+            onClick={restart}
+          >
+            <span className="navIcon">+</span>
+            New game
+          </button>
+          <a className="navItem" href="/history">
+            <span className="navIcon ghost" aria-hidden="true">↺</span>
+            History
+          </a>
+        </nav>
+        <div className="sidebarFooter">
+          <StatusPill value={connection} />
+        </div>
+      </aside>
+
+      <main className="appMain">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Anonymous chat · guess human or AI</p>
+            <h1>Read the room. Then read the world.</h1>
+          </div>
+        </header>
 
       {phase === "landing" && (
         <Landing
@@ -920,7 +971,8 @@ function GameApp() {
           {phase === "reveal" && result && <Reveal result={result} onRestart={restart} />}
         </section>
       )}
-    </main>
+      </main>
+    </div>
   );
 }
 

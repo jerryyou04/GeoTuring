@@ -41,6 +41,7 @@ const {
 } = require("./sessionHelpers");
 const { registerAdminRoutes } = require("./admin");
 const { createQueueService } = require("./queue");
+const db = require("./db");
 const {
   createAiResponseStatus,
   getAiSendDelay,
@@ -74,6 +75,48 @@ app.get("/health", (req, res) => {
     ok: true,
   });
 });
+
+app.get("/api/history", async (req, res) => {
+  const playerId = sanitizePlayerId(req.query.playerId);
+
+  if (!playerId) {
+    res.status(400).json({ error: "playerId_required" });
+    return;
+  }
+
+  try {
+    const games = await db.getPlayerHistory(playerId, 100);
+    res.json({ enabled: db.isDbEnabled(), games });
+  } catch (error) {
+    console.error("History query failed:", error.message);
+    res.status(500).json({ error: "history_unavailable" });
+  }
+});
+
+function persistResultHistory(playerId, result) {
+  if (!playerId || !result || !db.isDbEnabled()) {
+    return;
+  }
+
+  db
+    .saveGameHistory({
+      playerId,
+      sessionId: result.sessionId,
+      opponentType: result.actual?.participantType || "Unknown",
+      identityGuess: result.guess?.identityGuess || null,
+      correctIdentity: Boolean(result.correctIdentity),
+      readEarned: result.score?.read?.earned ?? 0,
+      readPossible: result.score?.read?.possible ?? 0,
+      roundType: result.score?.round?.type || "location",
+      roundEarned: result.score?.round?.earned ?? 0,
+      roundPossible: result.score?.round?.possible ?? 0,
+      distanceKm: result.distanceKm ?? null,
+      modelFamily: result.actual?.modelFamily || null,
+      actualRegion: result.actual?.region || null,
+      actualCountry: result.actual?.country || null,
+    })
+    .catch((error) => console.error("Failed to save game history:", error.message));
+}
 
 const sessions = new Map();
 const waitingQueue = new Map();
@@ -295,11 +338,26 @@ function handleGuessSubmit(socket, payload = {}) {
     player.guess = sanitizeSubmittedGuess(payload);
     player.result = scoreHumanGuess(session, socket.id, player.guess);
     markSubmitted(session, socket.id);
-    socket.emit("guess:submitted", {
-      sessionId: session.id,
-      waitingForOpponent: !areHumanFinalGuessesDone(session),
-    });
-    emitHumanResultsIfReady(session);
+
+    const partnerSocketId = getHumanPartnerSocketId(session, socket.id);
+    const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+    const partnerAlreadyDone = Boolean(partner && partner.submitted);
+
+    // Hand this player their own result right away. The opponent's guess stays
+    // pending (with a countdown) until they answer.
+    emitHumanPlayerResult(session, socket.id);
+
+    // If the opponent already finished, fill their guess into the result they
+    // received earlier.
+    if (partnerSocketId && partnerAlreadyDone) {
+      emitOpponentGuessFill(session, partnerSocketId);
+    }
+
+    if (areHumanFinalGuessesDone(session)) {
+      clearFinalGuessTimer(session);
+      deleteSession(session.id);
+    }
+
     return;
   }
 
@@ -311,6 +369,7 @@ function handleGuessSubmit(socket, payload = {}) {
   session.result = scoreAiGuess(session, session.guess);
   session.submitted = true;
   socket.emit("session:result", session.result);
+  persistResultHistory(session.playerId, session.result);
   deleteSession(session.id);
 }
 
@@ -406,6 +465,16 @@ function resumeSession(socket, payload = {}) {
     });
   } else {
     emitTurnState(session);
+  }
+
+  // If this player already locked in their guess, re-send their result so they
+  // land back on the reveal (opponent still pending if they have not answered).
+  if (session.mode === "human") {
+    const resumedPlayer = session.players[socket.id];
+
+    if (resumedPlayer && resumedPlayer.submitted && resumedPlayer.result) {
+      emitHumanPlayerResult(session, socket.id);
+    }
   }
 }
 
@@ -711,16 +780,26 @@ function finalizeMissingGuesses(sessionId) {
   }
 
   if (session.mode === "human") {
-    Object.keys(session.players).forEach((socketId) => {
+    const socketIds = Object.keys(session.players);
+    const alreadyDone = socketIds.filter((socketId) => session.players[socketId].submitted);
+
+    socketIds.forEach((socketId) => {
       const player = session.players[socketId];
 
       if (!player.submitted) {
         player.guess = createNoGuess();
         player.result = scoreHumanGuess(session, socketId, player.guess);
         player.submitted = true;
+        // First result for the player who ran out of time.
+        emitHumanPlayerResult(session, socketId);
       }
     });
-    emitHumanResultsIfReady(session);
+
+    // Anyone who already had their result now learns the opponent's missing guess.
+    alreadyDone.forEach((socketId) => emitOpponentGuessFill(session, socketId));
+
+    clearFinalGuessTimer(session);
+    deleteSession(session.id);
     return;
   }
 
@@ -729,32 +808,45 @@ function finalizeMissingGuesses(sessionId) {
     session.result = scoreAiGuess(session, session.guess);
     session.submitted = true;
     io.to(session.playerSocketId).emit("session:result", session.result);
+    persistResultHistory(session.playerId, session.result);
     deleteSession(session.id);
   }
 }
 
-function emitHumanResultsIfReady(session) {
-  if (!areHumanFinalGuessesDone(session)) {
+function emitHumanPlayerResult(session, socketId) {
+  const player = session.players[socketId];
+
+  if (!player || !player.result) {
     return;
   }
 
-  clearFinalGuessTimer(session);
+  const partnerSocketId = getHumanPartnerSocketId(session, socketId);
+  const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+  const opponentReady = Boolean(partner && partner.submitted);
 
-  Object.keys(session.players).forEach((socketId) => {
-    const player = session.players[socketId];
-    const partnerSocketId = getHumanPartnerSocketId(session, socketId);
-    const partner = partnerSocketId ? session.players[partnerSocketId] : null;
-
-    if (player.result) {
-      io.to(socketId).emit("session:result", {
-        ...player.result,
-        opponentGuess: partner ? revealSubmittedGuess(partner.guess) : null,
-        opponentActual: player ? revealHumanLocation(player.location) : null,
-      });
-    }
+  io.to(socketId).emit("session:result", {
+    ...player.result,
+    opponentGuess: opponentReady ? revealSubmittedGuess(partner.guess) : null,
+    opponentActual: revealHumanLocation(player.location),
+    opponentPending: !opponentReady,
+    opponentGuessEndsAt: session.finalGuessEndsAt || null,
   });
 
-  deleteSession(session.id);
+  persistResultHistory(player.playerId, player.result);
+}
+
+function emitOpponentGuessFill(session, socketId) {
+  const partnerSocketId = getHumanPartnerSocketId(session, socketId);
+  const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+
+  if (!partner) {
+    return;
+  }
+
+  io.to(socketId).emit("opponent:guess", {
+    sessionId: session.id,
+    opponentGuess: revealSubmittedGuess(partner.guess),
+  });
 }
 
 function revealHumanLocation(location = {}) {
@@ -918,4 +1010,5 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`GeoTuring backend listening on 0.0.0.0:${PORT}`);
+  db.initDb().catch((error) => console.error("Database init failed:", error.message));
 });

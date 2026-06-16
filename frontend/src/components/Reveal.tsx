@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import type { Pin, ResultPayload, SubmittedGuess } from "../types";
 
@@ -53,6 +53,7 @@ function HumanReveal({ result }: { result: ResultPayload }) {
   const guessedHuman = result.guess.identityGuess === "Human";
   const yourGuessPin = guessedHuman ? result.guess.locationGuess : null;
   const opponentGuess = result.opponentGuess;
+  const opponentPending = Boolean(result.opponentPending) && !opponentGuess;
   const opponentActualPin = getActualPin(result.opponentActual || null);
 
   return (
@@ -73,7 +74,9 @@ function HumanReveal({ result }: { result: ResultPayload }) {
         guessPin={yourGuessPin}
         title={guessedHuman ? "Your location guess" : "Correct human location"}
       />
-      {opponentGuess ? (
+      {opponentPending ? (
+        <OpponentPendingCard endsAt={result.opponentGuessEndsAt ?? null} />
+      ) : opponentGuess ? (
         opponentGuess.identityGuess === "Human" ? (
           <LocationComparison
             correctLabel="Your rough location"
@@ -243,6 +246,37 @@ function scoreTone(earned: number, possible: number): ScoreTone {
   }
 
   return earned > 0 ? "partial" : "wrong";
+}
+
+function OpponentPendingCard({ endsAt }: { endsAt: number | null }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 500);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const secondsLeft = endsAt === null ? null : Math.max(0, Math.ceil((endsAt - now) / 1000));
+
+  return (
+    <section className="answerCard pending opponentPending">
+      <h3>Opponent's guess</h3>
+      <div className="opponentPendingBody">
+        <span className="opponentPendingSpinner" aria-hidden="true" />
+        <div className="opponentPendingText">
+          <strong>Waiting for their answer…</strong>
+          <span>
+            {secondsLeft === null
+              ? "They are still deciding."
+              : secondsLeft > 0
+                ? `${secondsLeft}s left before their guess locks`
+                : "Time's up — scoring their guess."}
+          </span>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function ScoreRow({ label, note, tone, value }: { label: string; note: string; tone: ScoreTone; value: string }) {

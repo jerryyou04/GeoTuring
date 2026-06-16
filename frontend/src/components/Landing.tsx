@@ -23,7 +23,7 @@ export function Landing({
   return (
     <section className="heroPanel">
       <div className="heroCopy">
-        <p className="roundLabel">Real-time deduction MVP</p>
+        <p className="roundLabel">Real-time deduction game</p>
         <h2>Chat anonymously with a stranger or a machine.</h2>
         <p>
           Ask a few questions, decide whether your partner is human or AI, then
@@ -42,20 +42,6 @@ export function Landing({
           status={locationStatus}
         />
         <PersistentScoreboard score={persistentScore} />
-        <div className="scorePreview" aria-label="Scoring preview">
-          <div>
-            <span>Read score</span>
-            <strong>0/1 or 1/1</strong>
-          </div>
-          <div>
-            <span>Human round</span>
-            <strong>0-100</strong>
-          </div>
-          <div>
-            <span>AI round</span>
-            <strong>0/1 or 1/1</strong>
-          </div>
-        </div>
       </div>
     </section>
   );
@@ -105,11 +91,15 @@ function PersistentScoreboard({ score }: { score: PersistentScore }) {
       <p className="roundLabel">Your scoreboard</p>
       <div className="persistentScoreRows">
         <ScoreLine label="Reads" value={`${score.readEarned}/${score.readPossible}`} detail={`${readPercent}%`} />
-        <ScoreLine label="Human score" value={`${score.humanEarned}/${score.humanPossible}`} detail={`${humanAverage}% avg`} />
+        <ScoreLine label="Human score" value={`${roundScore(score.humanEarned)}/${score.humanPossible}`} detail={`${humanAverage}% avg`} />
         <ScoreLine label="AI score" value={`${score.aiEarned}/${score.aiPossible}`} detail={`${aiPercent}%`} />
       </div>
     </aside>
   );
+}
+
+function roundScore(value: number) {
+  return Math.round(value * 10) / 10;
 }
 
 function ScoreLine({ label, value, detail }: { label: string; value: string; detail?: string }) {

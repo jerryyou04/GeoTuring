@@ -33,7 +33,7 @@ function buildScoreResult({ session, guess, actualParticipant }) {
   const correctIdentity = identityGuess === actualType;
   const readScore = correctIdentity ? 1 : 0;
   const roundType = actualType === "Human" ? "location" : "modelFamily";
-  const roundPossible = actualType === "Human" ? 100 : 1;
+  const roundPossible = 1;
   let distanceKm = null;
   let roundScore = 0;
 
@@ -51,7 +51,9 @@ function buildScoreResult({ session, guess, actualParticipant }) {
       actualParticipant.location.lat,
       actualParticipant.location.lng,
     );
-    roundScore = Math.max(0, Math.round(100 * (1 - distanceKm / 10000)));
+    // Continuous /1 score by closeness: ~1.0 spot on, ~0.5 mid, ~0.1 far,
+    // hitting 0 around half the globe away. Rounded to one decimal.
+    roundScore = Math.max(0, Math.round((1 - distanceKm / 10000) * 10) / 10);
   }
 
   if (
@@ -113,8 +115,8 @@ function buildExplanation(participant, correctIdentity, distanceKm) {
     const place = [location.region, location.country].filter(Boolean).join(", ") || "the partner's rough location";
     const locationText =
       distanceKm === null
-        ? "Your round score is 0/100 because no valid human-location comparison was available."
-        : `Your location score is based on a pin ${Math.round(distanceKm)} km from ${place}.`;
+        ? "Your location score is 0/1 because no valid human-location comparison was available."
+        : `Your location score is out of 1, based on a pin ${Math.round(distanceKm)} km from ${place}.`;
 
     return `${correctIdentity ? "You called the identity correctly." : "The identity read was off."} ${locationText}`;
   }
