@@ -46,10 +46,11 @@ const AI_FALLBACK_SECONDS = 20;
 const QUEUE_ESTIMATED_SECONDS = 8;
 const GUESS_GRACE_SECONDS = 300;
 const MIN_MESSAGES_PER_SIDE = 2;
-const TURN_SECONDS = 15;
+const TURN_SECONDS = 25;
 const TURN_MS = TURN_SECONDS * 1000;
-const AI_TYPING_MIN_MS = 1800;
-const AI_TYPING_MAX_MS = 3600;
+const AI_TYPING_MIN_RATIO = 0.05;
+const AI_TYPING_MAX_RATIO = 0.82;
+const AI_SEND_DEADLINE_BUFFER_MS = 750;
 const FINAL_GUESS_SECONDS = 25;
 const FINAL_GUESS_MS = FINAL_GUESS_SECONDS * 1000;
 const ADMIN_API_PATH = "/admin/host-monitor";
@@ -138,7 +139,7 @@ function addToQueue(socket, payload = {}) {
       }
 
       removeFromQueue(socket.id);
-      createAiSession(socket, entry.location);
+      createAiSession(socket, entry.location, null, entry.queuedAt);
     }, AI_FALLBACK_SECONDS * 1000);
   }
 }
@@ -222,8 +223,10 @@ function createHumanSession(first, second) {
     turnOwner: null,
     turnEndsAt: null,
     turnTimer: null,
+    chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
+    aiResponseStatus: createAiResponseStatus("idle"),
     timeout: null,
     expireTimer: null,
   };
@@ -234,6 +237,7 @@ function createHumanSession(first, second) {
   first.socket.join(session.id);
   second.socket.join(session.id);
   emitMatchFound([first, second]);
+  scheduleChatEnd(session);
   scheduleSessionExpiry(session);
 
   [first.socket, second.socket].forEach((socket) => {
@@ -250,7 +254,7 @@ function createHumanSession(first, second) {
   return session;
 }
 
-function createAiSession(socket, playerLocation, requestedModelFamily = null) {
+function createAiSession(socket, playerLocation, requestedModelFamily = null, queuedAt = Date.now()) {
   const modelFamily = MODEL_FAMILIES.includes(requestedModelFamily) ? requestedModelFamily : pick(MODEL_FAMILIES);
   const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
   const playerId = sanitizePlayerId(socket.data.playerId);
@@ -275,6 +279,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null) {
     turnOwner: null,
     turnEndsAt: null,
     turnTimer: null,
+    chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
     timeout: null,
@@ -284,13 +289,14 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null) {
   sessions.set(session.id, session);
   socketSessions.set(socket.id, session.id);
   socket.join(session.id);
+  scheduleChatEnd(session);
   scheduleSessionExpiry(session);
 
   socket.emit("queue:status", {
     connectedProfiles: 2,
     requiredProfiles: 2,
     status: "found",
-    queuedAt: Date.now(),
+    queuedAt,
     estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
   });
 
@@ -311,6 +317,7 @@ function createRequestedAiSession(socket, payload = {}) {
     return;
   }
 
+  const queueEntry = waitingQueue.get(socket.id);
   removeFromQueue(socket.id);
 
   const playerId = sanitizePlayerId(payload.playerId);
@@ -325,7 +332,7 @@ function createRequestedAiSession(socket, payload = {}) {
     return;
   }
 
-  createAiSession(socket, location, payload.modelFamily);
+  createAiSession(socket, location, payload.modelFamily, queueEntry?.queuedAt || Date.now());
 }
 
 function createHumanSessionPlayer(entry) {
@@ -344,6 +351,11 @@ function handleChatMessage(socket, payload = {}) {
   const session = sessions.get(payload.sessionId);
 
   if (!isSocketInSession(session, socket.id) || session.ended || session.chatLocked) {
+    return;
+  }
+
+  if (Date.now() >= session.chatEndsAt) {
+    handleChatExpired(session.id);
     return;
   }
 
@@ -410,6 +422,11 @@ function handleGuessSubmit(socket, payload = {}) {
     return;
   }
 
+  if (session.finalGuessEndsAt && Date.now() >= session.finalGuessEndsAt) {
+    finalizeMissingGuesses(session.id);
+    return;
+  }
+
   if (session.mode === "human") {
     const player = session.players[socket.id];
 
@@ -443,6 +460,11 @@ function handleRoundLock(socket, payload = {}) {
   const session = sessions.get(payload.sessionId);
 
   if (!isSocketInSession(session, socket.id) || session.ended || session.chatLocked) {
+    return;
+  }
+
+  if (Date.now() >= session.chatEndsAt) {
+    handleChatExpired(session.id);
     return;
   }
 
@@ -793,15 +815,18 @@ function startTurn(session, owner) {
   clearTurnTimer(session);
   session.timeout = null;
   session.turnOwner = owner;
-  session.turnEndsAt = owner === "partner" ? null : Date.now() + TURN_MS;
+  session.turnEndsAt = Date.now() + TURN_MS;
   emitTurnState(session);
 
   if (owner === "partner" && session.mode === "ai") {
-    setTimeout(() => {
-      sendAiTurnMessage(session.id).catch((error) => {
-        console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
+    session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), TURN_MS);
+    sendAiTurnMessage(session.id).catch((error) => {
+      console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
+      markAiResponseStatus(session, {
+        state: "failed",
+        error: error.message,
       });
-    }, getAiTypingDelay(session));
+    });
     return;
   }
 
@@ -815,26 +840,98 @@ async function sendAiTurnMessage(sessionId) {
     return;
   }
 
-  const reply = await session.participant.adapter.generateReply(session.messages, {
-    sessionId: session.id,
+  const turnStartedAt = Date.now();
+  markAiResponseStatus(session, {
+    state: "generating",
+    error: null,
+    responseText: null,
   });
+
+  let replyResult;
+
+  try {
+    replyResult = normalizeAiReplyResult(await session.participant.adapter.generateReply(session.messages, {
+      sessionId: session.id,
+    }));
+  } catch (error) {
+    markAiResponseStatus(session, {
+      state: "failed",
+      error: error.message,
+    });
+    return;
+  }
+
   const currentSession = sessions.get(sessionId);
 
   if (!currentSession || currentSession !== session || session.ended || session.turnOwner !== "partner") {
     return;
   }
 
+  if (!replyResult.text) {
+    markAiResponseStatus(session, {
+      state: "failed",
+      error: "AI generated an empty response.",
+    });
+    return;
+  }
+
+  const targetTypingMs = getAiTypingDelay(replyResult.text);
+  const elapsedMs = Date.now() - turnStartedAt;
+  const remainingMs = Math.max(0, session.turnEndsAt - Date.now() - AI_SEND_DEADLINE_BUFFER_MS);
+  const delayMs = Math.min(Math.max(0, targetTypingMs - elapsedMs), remainingMs);
+
+  markAiResponseStatus(session, {
+    state: "typing",
+    responseText: replyResult.text,
+    source: replyResult.source,
+    failed: replyResult.failed,
+    error: replyResult.error,
+    model: replyResult.model,
+    delayMs,
+  });
+
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
+
+  if (!sessions.has(sessionId) || session.ended || session.chatLocked || session.turnOwner !== "partner") {
+    return;
+  }
+
+  if (Date.now() >= session.turnEndsAt) {
+    handleTurnTimeout(session.id, "partner");
+    return;
+  }
+
   const message = {
     id: cryptoRandomId(),
     author: "partner",
-    text: reply,
+    text: replyResult.text,
     sentAt: Date.now(),
   };
 
   session.messages.push({
     author: "partner",
-    text: reply,
+    text: replyResult.text,
     sentAt: message.sentAt,
+    ai: {
+      source: replyResult.source,
+      failed: replyResult.failed,
+      error: replyResult.error,
+      model: replyResult.model,
+      typingDelayMs: Math.round(delayMs),
+      targetTypingMs: Math.round(targetTypingMs),
+    },
+  });
+
+  markAiResponseStatus(session, {
+    state: "sent",
+    responseText: replyResult.text,
+    source: replyResult.source,
+    failed: replyResult.failed,
+    error: replyResult.error,
+    model: replyResult.model,
+    delayMs,
   });
 
   io.to(session.playerSocketId).emit("partner:message", {
@@ -844,12 +941,86 @@ async function sendAiTurnMessage(sessionId) {
   startTurn(session, session.playerSocketId);
 }
 
-function getAiTypingDelay(session) {
-  const range = AI_TYPING_MAX_MS - AI_TYPING_MIN_MS;
-  const baseDelay = AI_TYPING_MIN_MS + Math.random() * range;
-  const openingMessageDelay = session.messages.length === 0 ? 900 : 0;
+function getAiTypingDelay(reply) {
+  const text = String(reply || "");
+  const chars = text.length;
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const estimatedTypingMs = 850 + chars * 38 + words * 95;
+  const randomMultiplier = 0.72 + Math.random() * 0.58;
+  const randomJitterMs = randomInt(-220, 420);
+  const minMs = TURN_MS * AI_TYPING_MIN_RATIO;
+  const maxMs = TURN_MS * AI_TYPING_MAX_RATIO;
 
-  return baseDelay + openingMessageDelay;
+  return Math.round(clamp(estimatedTypingMs * randomMultiplier + randomJitterMs, minMs, maxMs));
+}
+
+function normalizeAiReplyResult(value) {
+  if (typeof value === "string") {
+    return {
+      text: value,
+      source: "unknown",
+      failed: false,
+      error: null,
+      model: null,
+    };
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return {
+      text: String(value.text || ""),
+      source: String(value.source || "unknown"),
+      failed: Boolean(value.failed),
+      error: value.error ? String(value.error).slice(0, 240) : null,
+      model: value.model ? String(value.model).slice(0, 120) : null,
+    };
+  }
+
+  return {
+    text: "",
+    source: "unknown",
+    failed: true,
+    error: "AI provider returned no response.",
+    model: null,
+  };
+}
+
+function createAiResponseStatus(state, overrides = {}) {
+  return {
+    state,
+    responseText: null,
+    source: null,
+    failed: false,
+    error: null,
+    model: null,
+    delayMs: null,
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function markAiResponseStatus(session, updates) {
+  if (session.mode !== "ai") {
+    return;
+  }
+
+  session.aiResponseStatus = {
+    ...createAiResponseStatus(session.aiResponseStatus?.state || "idle"),
+    ...session.aiResponseStatus,
+    ...updates,
+    updatedAt: Date.now(),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function handleTurnTimeout(sessionId, owner) {
@@ -874,6 +1045,38 @@ function handleTurnTimeout(sessionId, owner) {
   session.timeout = null;
   startFinalGuessTimer(session);
   emitRoundLocked(session, null, "The turn timer expired, so the chat is locked. Make your final read.");
+}
+
+function scheduleChatEnd(session) {
+  if (session.chatTimer) {
+    clearTimeout(session.chatTimer);
+  }
+
+  session.chatTimer = setTimeout(() => handleChatExpired(session.id), Math.max(0, session.chatEndsAt - Date.now()));
+}
+
+function handleChatExpired(sessionId) {
+  const session = sessions.get(sessionId);
+
+  if (!session || session.ended || session.chatLocked) {
+    return;
+  }
+
+  clearTurnTimer(session);
+
+  if (!isGuessReady(session)) {
+    session.ended = true;
+    emitSessionEnded(session, "The round ended because time ran out before enough messages were exchanged.");
+    deleteSession(session.id);
+    return;
+  }
+
+  session.chatLocked = true;
+  session.turnOwner = null;
+  session.turnEndsAt = null;
+  session.timeout = null;
+  startFinalGuessTimer(session);
+  emitRoundLocked(session, null, "Time ran out, so the chat is locked. Make your final read.");
 }
 
 function clearTurnTimer(session) {
@@ -1184,6 +1387,9 @@ function deleteSession(sessionId) {
   if (session.expireTimer) {
     clearTimeout(session.expireTimer);
   }
+  if (session.chatTimer) {
+    clearTimeout(session.chatTimer);
+  }
   clearTurnTimer(session);
   clearFinalGuessTimer(session);
 
@@ -1361,6 +1567,7 @@ function describeAdminRoom(session) {
     mode: session.mode,
     createdAt: session.createdAt,
     chatEndsAt: session.chatEndsAt,
+    aiResponseStatus: session.mode === "ai" ? session.aiResponseStatus : null,
     participants,
     messages: session.messages.map((message, index) => ({
       id: `${session.id}:${index}`,
@@ -1368,6 +1575,7 @@ function describeAdminRoom(session) {
       authorLabel: getAdminAuthorLabel(session, message.author),
       text: message.text,
       sentAt: message.sentAt,
+      ai: message.ai || null,
     })),
   };
 }

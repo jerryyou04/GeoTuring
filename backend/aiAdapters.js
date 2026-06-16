@@ -113,18 +113,38 @@ function createOpenRouterAiProvider(modelFamily, persona) {
 
         if (!text) {
           console.warn(`OpenRouter returned an unusable reply for ${modelFamily} (${model}); using local fallback.`);
-          return fallback.generateReply(messages);
+          return buildAiReplyResult(await fallback.generateReply(messages), {
+            source: "local_fallback",
+            failed: true,
+            error: "OpenRouter returned an unusable reply.",
+            model,
+          });
         }
 
         if (isOpeningTurn && isInvalidOpeningReply(text)) {
           console.warn(`OpenRouter returned an impossible opening reply for ${modelFamily} (${model}); using local fallback.`);
-          return fallback.generateReply(messages);
+          return buildAiReplyResult(await fallback.generateReply(messages), {
+            source: "local_fallback",
+            failed: true,
+            error: "OpenRouter returned an impossible opening reply.",
+            model,
+          });
         }
 
-        return text;
+        return buildAiReplyResult(text, {
+          source: "openrouter",
+          failed: false,
+          error: null,
+          model,
+        });
       } catch (error) {
         console.warn(`OpenRouter reply failed for ${modelFamily}: ${error.message}`);
-        return fallback.generateReply(messages);
+        return buildAiReplyResult(await fallback.generateReply(messages), {
+          source: "local_fallback",
+          failed: true,
+          error: error.message,
+          model,
+        });
       }
     },
   };
@@ -261,29 +281,71 @@ function createMockAiProvider(modelFamily, persona) {
       const hasChat = messages.some((message) => message?.author !== "system" && message?.text);
 
       if (!hasChat) {
-        return pick(OPENING_LINES);
+        return buildAiReplyResult(pick(OPENING_LINES), {
+          source: "local",
+          failed: false,
+          error: null,
+          model: "mock",
+        });
       }
 
       const lastMessage = messages[messages.length - 1]?.text || "";
       const normalized = lastMessage.toLowerCase();
 
       if (normalized.includes("where") || normalized.includes("from")) {
-        return persona?.regionFamiliarity
+        const reply = persona?.regionFamiliarity
           ? `i know ${persona.regionFamiliarity} better than most places`
           : "somewhere people drink too much coffee";
+
+        return buildAiReplyResult(reply, {
+          source: "local",
+          failed: false,
+          error: null,
+          model: "mock",
+        });
       }
 
       if (normalized.includes("?")) {
-        return shapeMockReply(pick(lines), persona);
+        return buildAiReplyResult(shapeMockReply(pick(lines), persona), {
+          source: "local",
+          failed: false,
+          error: null,
+          model: "mock",
+        });
       }
 
-      return shapeMockReply(pick([
+      return buildAiReplyResult(shapeMockReply(pick([
         ...lines,
         "same",
         "that is a pretty specific take",
         "i get what you mean",
-      ]), persona);
+      ]), persona), {
+        source: "local",
+        failed: false,
+        error: null,
+        model: "mock",
+      });
     },
+  };
+}
+
+function buildAiReplyResult(value, metadata = {}) {
+  if (typeof value === "object" && value !== null && typeof value.text === "string") {
+    return {
+      text: value.text,
+      source: value.source || metadata.source || "unknown",
+      failed: Boolean(value.failed ?? metadata.failed),
+      error: value.error || metadata.error || null,
+      model: value.model || metadata.model || null,
+    };
+  }
+
+  return {
+    text: String(value || ""),
+    source: metadata.source || "unknown",
+    failed: Boolean(metadata.failed),
+    error: metadata.error || null,
+    model: metadata.model || null,
   };
 }
 

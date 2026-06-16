@@ -175,8 +175,29 @@ interface AdminRoom {
   mode: "human" | "ai";
   createdAt: number;
   chatEndsAt: number;
+  aiResponseStatus: AdminAiResponseStatus | null;
   participants: AdminParticipant[];
   messages: AdminTranscriptMessage[];
+}
+
+interface AdminAiResponseStatus {
+  state: "idle" | "generating" | "typing" | "sent" | "failed";
+  responseText: string | null;
+  source: string | null;
+  failed: boolean;
+  error: string | null;
+  model: string | null;
+  delayMs: number | null;
+  updatedAt: number;
+}
+
+interface AdminTranscriptAiMeta {
+  source: string;
+  failed: boolean;
+  error: string | null;
+  model: string | null;
+  typingDelayMs: number;
+  targetTypingMs: number;
 }
 
 interface AdminTranscriptMessage {
@@ -185,6 +206,7 @@ interface AdminTranscriptMessage {
   authorLabel: string;
   text: string;
   sentAt: number;
+  ai: AdminTranscriptAiMeta | null;
 }
 
 const API_URL = resolveServiceUrl(
@@ -266,6 +288,7 @@ function GameApp() {
   const [connectedProfiles, setConnectedProfiles] = useState(0);
   const [requiredProfiles, setRequiredProfiles] = useState(2);
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
+  const [queueFrozenSeconds, setQueueFrozenSeconds] = useState<number | null>(null);
   const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
   const [persistentScore, setPersistentScore] = useState<PersistentScore>(() => loadPersistentScore());
   const [locationConsent, setLocationConsent] = useState(() => loadLocationConsent());
@@ -281,17 +304,22 @@ function GameApp() {
   }, [chatEndsAt, now]);
 
   const actualQueueSeconds = useMemo(() => {
+    if (queueStatus === "found" && queueFrozenSeconds !== null) {
+      return queueFrozenSeconds;
+    }
+
     if (!queueStartedAt) {
       return 0;
     }
 
     return Math.max(0, Math.floor((now - queueStartedAt) / 1000));
-  }, [now, queueStartedAt]);
+  }, [now, queueFrozenSeconds, queueStartedAt, queueStatus]);
 
   const chatCounts = turnState.counts || getVisibleMessageCounts(messages);
   const canGuess = chatCounts.player >= MIN_MESSAGES_PER_SIDE && chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
   const isPlayerTurn = phase === "chat" && turnState.currentTurn === "player";
   const isFinalGuessPhase = phase === "identity" || phase === "humanGuess" || phase === "aiGuess" || phase === "waitingGuess";
+  const finalGuessExpired = isFinalGuessPhase && finalGuessEndsAt !== null && finalGuessEndsAt <= now;
   const turnSecondsLeft = turnState.turnEndsAt
     ? Math.max(0, Math.ceil((turnState.turnEndsAt - now) / 1000))
     : TURN_SECONDS;
@@ -371,6 +399,26 @@ function GameApp() {
   function clearQueueUiTimers() {
     queueTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     queueTimersRef.current = [];
+  }
+
+  function applyQueueStatus(payload: QueueStatusPayload) {
+    const queuedAt = Number.isFinite(payload.queuedAt)
+      ? payload.queuedAt
+      : queueStartedAtRef.current || Date.now();
+
+    setQueueStatus(payload.status);
+    setConnectedProfiles(payload.connectedProfiles);
+    setRequiredProfiles(payload.requiredProfiles);
+    setQueueStartedAt(queuedAt);
+    queueStartedAtRef.current = queuedAt;
+    setEstimatedQueueSeconds(payload.estimatedSeconds);
+
+    if (payload.status === "found") {
+      setQueueFrozenSeconds((current) => current ?? Math.max(0, Math.floor((Date.now() - queuedAt) / 1000)));
+      return;
+    }
+
+    setQueueFrozenSeconds(null);
   }
 
   function resumeActiveSession(activeSessionId: string) {
@@ -546,6 +594,7 @@ function GameApp() {
     setRequiredProfiles(2);
     setQueueStartedAt(queuedAt);
     queueStartedAtRef.current = queuedAt;
+    setQueueFrozenSeconds(null);
     setEstimatedQueueSeconds(8);
     setNow(queuedAt);
 
@@ -570,12 +619,7 @@ function GameApp() {
     });
 
     socket.on("queue:status", (payload: QueueStatusPayload) => {
-      setQueueStatus(payload.status);
-      setConnectedProfiles(payload.connectedProfiles);
-      setRequiredProfiles(payload.requiredProfiles);
-      setQueueStartedAt(payload.queuedAt);
-      queueStartedAtRef.current = payload.queuedAt;
-      setEstimatedQueueSeconds(payload.estimatedSeconds);
+      applyQueueStatus(payload);
     });
 
     socket.on("queue:error", (payload: QueueErrorPayload) => {
@@ -584,6 +628,7 @@ function GameApp() {
       socket.disconnect();
       setPhase("landing");
       setConnection("idle");
+      setQueueFrozenSeconds(null);
       setLocationStatus(payload.code === "location_required" ? "invalid" : "unavailable");
     });
 
@@ -755,6 +800,10 @@ function GameApp() {
   }
 
   function chooseIdentity(value: IdentityGuess) {
+    if (finalGuessExpired) {
+      return;
+    }
+
     setIdentityGuess(value);
     setPhase(value === "Human" ? "humanGuess" : "aiGuess");
   }
@@ -782,7 +831,7 @@ function GameApp() {
   }
 
   function submitGuess(nextModelGuess = modelGuess) {
-    if (!identityGuess || !sessionId) {
+    if (!identityGuess || !sessionId || finalGuessExpired) {
       return;
     }
 
@@ -819,6 +868,7 @@ function GameApp() {
     setRequiredProfiles(2);
     setQueueStartedAt(null);
     queueStartedAtRef.current = null;
+    setQueueFrozenSeconds(null);
     setEstimatedQueueSeconds(8);
   }
 
@@ -999,9 +1049,12 @@ function GameApp() {
           onRestart={restart}
         />
       )}
-      {phase === "identity" && <IdentityGuessScreen secondsLeft={finalGuessSecondsLeft} onPick={chooseIdentity} />}
+      {phase === "identity" && (
+        <IdentityGuessScreen disabled={finalGuessExpired} secondsLeft={finalGuessSecondsLeft} onPick={chooseIdentity} />
+      )}
       {phase === "humanGuess" && (
         <HumanGuessScreen
+          disabled={finalGuessExpired}
           pin={pin}
           secondsLeft={finalGuessSecondsLeft}
           onPin={setPin}
@@ -1011,6 +1064,7 @@ function GameApp() {
       )}
       {phase === "aiGuess" && (
         <AiGuessScreen
+          disabled={finalGuessExpired}
           secondsLeft={finalGuessSecondsLeft}
           selected={modelGuess}
           onBack={() => setPhase("identity")}
@@ -1231,6 +1285,37 @@ function AdminRoomCard({ room }: { room: AdminRoom }) {
         </div>
       </div>
 
+      {room.aiResponseStatus && (
+        <div className={`aiAdminStatus ${room.aiResponseStatus.failed ? "failed" : ""}`}>
+          <div>
+            <span>AI status</span>
+            <strong>{formatAiState(room.aiResponseStatus.state)}</strong>
+          </div>
+          <div>
+            <span>Source</span>
+            <strong>{formatAiSource(room.aiResponseStatus.source)}</strong>
+          </div>
+          {room.aiResponseStatus.delayMs !== null && (
+            <div>
+              <span>Typing delay</span>
+              <strong>{formatMs(room.aiResponseStatus.delayMs)}</strong>
+            </div>
+          )}
+          {room.aiResponseStatus.error && (
+            <div className="aiAdminError">
+              <span>Failure</span>
+              <strong>{room.aiResponseStatus.error}</strong>
+            </div>
+          )}
+          {room.aiResponseStatus.responseText && (
+            <div className="aiAdminResponse">
+              <span>Exact response</span>
+              <strong>{room.aiResponseStatus.responseText}</strong>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="participantGrid">
         {room.participants.map((participant) => (
           <div className="participantCard" key={`${room.id}:${participant.label}`}>
@@ -1256,6 +1341,14 @@ function AdminRoomCard({ room }: { room: AdminRoom }) {
                 <strong>{message.authorLabel}</strong>
                 <time>{formatTimestamp(message.sentAt)}</time>
               </div>
+              {message.ai && (
+                <div className={`aiTranscriptMeta ${message.ai.failed ? "failed" : ""}`}>
+                  <span>{formatAiSource(message.ai.source)}</span>
+                  <span>{message.ai.failed ? "Fallback after failure" : "Delivered"}</span>
+                  <span>{formatMs(message.ai.typingDelayMs)} delay</span>
+                  {message.ai.error && <span>{message.ai.error}</span>}
+                </div>
+              )}
               <p>{message.text}</p>
             </div>
           ))
@@ -1265,6 +1358,40 @@ function AdminRoomCard({ room }: { room: AdminRoom }) {
       </div>
     </article>
   );
+}
+
+function formatAiState(value: string) {
+  const labels: Record<string, string> = {
+    idle: "Idle",
+    generating: "Generating",
+    typing: "Typing",
+    sent: "Sent",
+    failed: "Failed",
+  };
+
+  return labels[value] || value;
+}
+
+function formatAiSource(value: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const labels: Record<string, string> = {
+    openrouter: "OpenRouter",
+    local: "Local mock",
+    local_fallback: "Local fallback",
+  };
+
+  return labels[value] || value;
+}
+
+function formatMs(value: number) {
+  if (!Number.isFinite(value)) {
+    return "0.0s";
+  }
+
+  return `${(value / 1000).toFixed(1)}s`;
 }
 
 function StatusPill({ value }: { value: string }) {
@@ -1526,9 +1653,7 @@ function ChatRoom({
       ? `${finalGuessSecondsLeft}s`
       : turnState.currentTurn === "paused"
         ? "--"
-        : turnState.currentTurn === "partner" && !turnState.turnEndsAt
-          ? "..."
-          : `${turnSecondsLeft}s`;
+        : `${turnSecondsLeft}s`;
   const showPartnerTyping = !isEnded && !isLocked && turnState.currentTurn === "partner";
 
   return (
@@ -1620,7 +1745,15 @@ function FinalGuessTimer({ secondsLeft }: { secondsLeft: number }) {
   );
 }
 
-function IdentityGuessScreen({ secondsLeft, onPick }: { secondsLeft: number; onPick: (value: IdentityGuess) => void }) {
+function IdentityGuessScreen({
+  disabled,
+  secondsLeft,
+  onPick,
+}: {
+  disabled: boolean;
+  secondsLeft: number;
+  onPick: (value: IdentityGuess) => void;
+}) {
   return (
     <section className="centerPanel">
       <div className="finalGuessHeader">
@@ -1631,11 +1764,11 @@ function IdentityGuessScreen({ secondsLeft, onPick }: { secondsLeft: number; onP
         <FinalGuessTimer secondsLeft={secondsLeft} />
       </div>
       <div className="choiceGrid two">
-        <button onClick={() => onPick("Human")}>
+        <button disabled={disabled} onClick={() => onPick("Human")}>
           <span>Human</span>
           <small>Next: place a map pin</small>
         </button>
-        <button onClick={() => onPick("AI")}>
+        <button disabled={disabled} onClick={() => onPick("AI")}>
           <span>AI</span>
           <small>Next: pick the model family</small>
         </button>
@@ -1645,12 +1778,14 @@ function IdentityGuessScreen({ secondsLeft, onPick }: { secondsLeft: number; onP
 }
 
 function HumanGuessScreen({
+  disabled,
   pin,
   secondsLeft,
   onPin,
   onBack,
   onSubmit,
 }: {
+  disabled: boolean;
   pin: Pin | null;
   secondsLeft: number;
   onPin: (pin: Pin) => void;
@@ -1666,17 +1801,23 @@ function HumanGuessScreen({
         </div>
         <div className="guessHeaderActions">
           <FinalGuessTimer secondsLeft={secondsLeft} />
-          <button className="secondaryButton" onClick={onBack}>
+          <button className="secondaryButton" disabled={disabled} onClick={onBack}>
             Back
           </button>
         </div>
       </div>
 
-      <GuessMap pin={pin} onPin={onPin} />
+      <GuessMap disabled={disabled} pin={pin} onPin={onPin} />
 
       <div className="mapFooter">
-        <span>{pin ? `${pin.lat.toFixed(1)} lat, ${pin.lng.toFixed(1)} lng` : "Tap the map to place a pin."}</span>
-        <button className="primaryButton" disabled={!pin} onClick={onSubmit}>
+        <span>
+          {disabled
+            ? "Final guess time expired."
+            : pin
+              ? `${pin.lat.toFixed(1)} lat, ${pin.lng.toFixed(1)} lng`
+              : "Tap the map to place a pin."}
+        </span>
+        <button className="primaryButton" disabled={disabled || !pin} onClick={onSubmit}>
           Lock human guess
         </button>
       </div>
@@ -1684,15 +1825,20 @@ function HumanGuessScreen({
   );
 }
 
-function GuessMap({ pin, onPin }: { pin: Pin | null; onPin: (pin: Pin) => void }) {
+function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null; onPin: (pin: Pin) => void }) {
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const onPinRef = useRef(onPin);
+  const disabledRef = useRef(disabled);
 
   useEffect(() => {
     onPinRef.current = onPin;
   }, [onPin]);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
 
   useEffect(() => {
     if (!mapElementRef.current || mapRef.current) {
@@ -1715,6 +1861,10 @@ function GuessMap({ pin, onPin }: { pin: Pin | null; onPin: (pin: Pin) => void }
     }).addTo(map);
 
     map.on("click", (event: L.LeafletMouseEvent) => {
+      if (disabledRef.current) {
+        return;
+      }
+
       onPinRef.current({
         lat: event.latlng.lat,
         lng: event.latlng.lng,
@@ -1759,17 +1909,21 @@ function GuessMap({ pin, onPin }: { pin: Pin | null; onPin: (pin: Pin) => void }
   return (
     <div className="guessMapShell">
       <div className="guessMap" ref={mapElementRef} />
-      <div className="mapCallout">Click anywhere to place your final guess.</div>
+      <div className="mapCallout">
+        {disabled ? "Final guess time expired." : "Click anywhere to place your final guess."}
+      </div>
     </div>
   );
 }
 
 function AiGuessScreen({
+  disabled,
   secondsLeft,
   selected,
   onPick,
   onBack,
 }: {
+  disabled: boolean;
   secondsLeft: number;
   selected: ModelFamily | null;
   onPick: (family: ModelFamily) => void;
@@ -1784,14 +1938,19 @@ function AiGuessScreen({
         </div>
         <div className="guessHeaderActions">
           <FinalGuessTimer secondsLeft={secondsLeft} />
-          <button className="secondaryButton" onClick={onBack}>
+          <button className="secondaryButton" disabled={disabled} onClick={onBack}>
             Back
           </button>
         </div>
       </div>
       <div className="choiceGrid">
         {MODEL_FAMILIES.map((family) => (
-          <button className={selected === family ? "selected" : ""} key={family} onClick={() => onPick(family)}>
+          <button
+            className={selected === family ? "selected" : ""}
+            disabled={disabled}
+            key={family}
+            onClick={() => onPick(family)}
+          >
             <span>{family}</span>
             <small>Lock answer</small>
           </button>

@@ -1187,6 +1187,43 @@ button:disabled {
   gap: 12px;
 }
 
+.aiAdminStatus {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(141, 224, 189, 0.22);
+  border-radius: 8px;
+  background: rgba(45, 161, 121, 0.08);
+}
+
+.aiAdminStatus.failed {
+  border-color: rgba(230, 106, 82, 0.45);
+  background: rgba(230, 106, 82, 0.1);
+}
+
+.aiAdminStatus div {
+  display: grid;
+  gap: 4px;
+}
+
+.aiAdminStatus span {
+  color: rgba(244, 241, 232, 0.62);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.aiAdminStatus strong {
+  color: #fff9ed;
+  overflow-wrap: anywhere;
+}
+
+.aiAdminStatus .aiAdminError,
+.aiAdminStatus .aiAdminResponse {
+  grid-column: 1 / -1;
+}
+
 .participantCard {
   display: grid;
   gap: 8px;
@@ -1249,6 +1286,26 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.transcriptMessage .aiTranscriptMeta {
+  justify-content: start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aiTranscriptMeta span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(45, 161, 121, 0.14);
+  color: #8de0bd;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.aiTranscriptMeta.failed span {
+  background: rgba(230, 106, 82, 0.14);
+  color: #ffd2c9;
 }
 
 .transcriptMessage strong {
