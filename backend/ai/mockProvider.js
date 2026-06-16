@@ -31,6 +31,30 @@ const OPENING_LINES = [
   "ok, easy one first. what have you been into lately?",
 ];
 
+const DODGE_LINES = [
+  "why, you writing a book?",
+  "somewhere with terrible wifi",
+  "antarctica obviously",
+  "not telling, nice try",
+  "a country you've definitely never heard of",
+  "mars rn",
+  "guess",
+];
+
+const CLAPBACK_LINES = [
+  "yikes wtf is wrong with you",
+  "ok weirdo, calm down",
+  "nah you're the creep here",
+  "cut it out gramps",
+  "you good? touch grass",
+  "imagine being this pressed",
+];
+
+const HOSTILE_TRIGGERS = [
+  "stupid", "idiot", "loser", "ugly", "shut up", "fuck you", "f you", "hate you",
+  "kill", "creep", "young girl", "retard", "dumbass", "threat", "dox",
+];
+
 function createMockAiProvider(modelFamily, persona) {
   const lines = AI_PERSONAS[modelFamily] || AI_PERSONAS.ChatGPT;
 
@@ -38,18 +62,18 @@ function createMockAiProvider(modelFamily, persona) {
     modelFamily,
     generateReply(messages) {
       if (!hasChatMessages(messages)) {
-        return buildLocalReply(pick(OPENING_LINES));
+        return buildLocalReply(applyCasing(pick(OPENING_LINES), persona));
       }
 
       const lastMessage = messages[messages.length - 1]?.text || "";
       const normalized = lastMessage.toLowerCase();
 
+      if (isHostile(normalized)) {
+        return buildLocalReply(applyCasing(pick(CLAPBACK_LINES), persona));
+      }
+
       if (normalized.includes("where") || normalized.includes("from")) {
-        return buildLocalReply(
-          persona?.regionFamiliarity
-            ? `i know ${persona.regionFamiliarity} better than most places`
-            : "somewhere people drink too much coffee",
-        );
+        return buildLocalReply(shapeMockReply(pick(DODGE_LINES), persona));
       }
 
       if (normalized.includes("?")) {
@@ -88,15 +112,24 @@ function shapeMockReply(reply, persona) {
     shaped = `${reply}, but i could be reading it wrong`;
   }
 
-  if (persona.emojiUsage === "often") {
-    return `${shaped} ${pick(["lol", "😭", "🤔"])}`;
+  // Occasional natural filler, but no habitual laughing.
+  if (persona.emojiUsage === "sometimes" && Math.random() < 0.18) {
+    shaped = `${shaped} ${pick(["fr", "ngl"])}`;
   }
 
-  if (persona.emojiUsage === "sometimes" && Math.random() < 0.35) {
-    return `${shaped} ${pick(["lol", "🤔"])}`;
+  return applyCasing(shaped, persona);
+}
+
+function applyCasing(text, persona) {
+  if (persona?.casing === "proper" && text) {
+    return text.charAt(0).toUpperCase() + text.slice(1);
   }
 
-  return shaped;
+  return text;
+}
+
+function isHostile(text) {
+  return HOSTILE_TRIGGERS.some((trigger) => text.includes(trigger));
 }
 
 module.exports = {

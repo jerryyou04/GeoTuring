@@ -109,11 +109,13 @@ function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null
   }, [disabled]);
 
   useEffect(() => {
-    if (!mapElementRef.current || mapRef.current) {
+    const element = mapElementRef.current;
+
+    if (!element || mapRef.current) {
       return;
     }
 
-    const map = L.map(mapElementRef.current, {
+    const map = L.map(element, {
       center: [20, 0],
       zoom: 2,
       minZoom: 2,
@@ -141,7 +143,15 @@ function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null
 
     mapRef.current = map;
 
+    // The map mounts while the round grid is still reflowing from one column to
+    // two, so its container size isn't final yet. Re-sync Leaflet whenever the
+    // container actually settles instead of relying on a single timer tick.
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
+
+    resizeObserver.observe(element);
+
     return () => {
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
       markerRef.current = null;

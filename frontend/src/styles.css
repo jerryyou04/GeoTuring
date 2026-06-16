@@ -625,7 +625,10 @@ button:disabled {
   grid-template-columns: 1fr;
 }
 
-.roundLayout > .gamePanel:not(.chatLayout) {
+/* Header / scrollable body / footer panels (chat, human-guess map). The reveal
+   is excluded: it is a plain vertical stack and a 1fr middle row would collapse
+   to 0 and let its content overlap the row below it. */
+.roundLayout > .gamePanel:not(.chatLayout):not(.reveal) {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
@@ -1095,9 +1098,17 @@ button:disabled {
 
 .reveal {
   align-content: start;
+  gap: 14px;
 }
 
 .revealTop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.revealTop > div {
   display: grid;
   gap: 6px;
 }
@@ -1106,6 +1117,30 @@ button:disabled {
   margin: 0;
   color: #cfc8b9;
   line-height: 1.45;
+}
+
+.verdictBadge {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 1.4rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.verdictBadge.correct {
+  border-color: rgba(94, 224, 164, 0.5);
+  background: rgba(94, 224, 164, 0.14);
+  color: #5ee0a4;
+}
+
+.verdictBadge.wrong {
+  border-color: rgba(230, 106, 82, 0.5);
+  background: rgba(230, 106, 82, 0.14);
+  color: #ff8e76;
 }
 
 .scoreSummary,
@@ -1125,13 +1160,26 @@ button:disabled {
 
 .scoreRow {
   display: grid;
-  grid-template-columns: 1fr;
-  align-items: start;
-  gap: 8px;
-  padding: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
   border: 1px solid rgba(244, 241, 232, 0.12);
+  border-left-width: 3px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.scoreRow.correct {
+  border-left-color: #5ee0a4;
+}
+
+.scoreRow.partial {
+  border-left-color: #f0b94d;
+}
+
+.scoreRow.wrong {
+  border-left-color: #e6422f;
 }
 
 .scoreRow div {
@@ -1155,12 +1203,31 @@ button:disabled {
   width: max-content;
   max-width: 100%;
   border-radius: 8px;
-  padding: 6px 9px;
+  padding: 6px 10px;
   border: 1px solid rgba(244, 241, 232, 0.16);
   background: rgba(255, 255, 255, 0.06);
   color: #fff9ed;
-  text-align: left;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
   white-space: nowrap;
+}
+
+.scoreRow.correct b {
+  border-color: rgba(94, 224, 164, 0.5);
+  background: rgba(94, 224, 164, 0.14);
+  color: #5ee0a4;
+}
+
+.scoreRow.partial b {
+  border-color: rgba(240, 185, 77, 0.5);
+  background: rgba(240, 185, 77, 0.14);
+  color: #ffd06a;
+}
+
+.scoreRow.wrong b {
+  border-color: rgba(230, 106, 82, 0.5);
+  background: rgba(230, 106, 82, 0.14);
+  color: #ff8e76;
 }
 
 .mapComparisonGrid {
@@ -1277,11 +1344,20 @@ button:disabled {
 
 .answerCard {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 9px;
+  padding: 12px 13px;
   border: 1px solid rgba(244, 241, 232, 0.12);
+  border-left-width: 3px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.answerCard.correct {
+  border-left-color: #5ee0a4;
+}
+
+.answerCard.wrong {
+  border-left-color: #e6422f;
 }
 
 .answerCard h3 {
@@ -1309,10 +1385,26 @@ button:disabled {
 }
 
 .answerCard dd {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
   margin: 0;
   color: #fff9ed;
   overflow-wrap: anywhere;
+}
+
+.answerCard dd.match {
+  color: #5ee0a4;
+}
+
+.answerCard dd.mismatch {
+  color: #ff8e76;
+}
+
+.lineCue {
+  flex: 0 0 auto;
+  font-weight: 900;
 }
 
 .explanation {

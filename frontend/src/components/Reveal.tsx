@@ -7,7 +7,8 @@ const GUESS_MARKER = createRevealMarker("guess");
 
 export function Reveal({ result, onRestart }: { result: ResultPayload; onRestart: () => void }) {
   const isHumanRound = result.actual.participantType === "Human";
-  const verdict = result.correctIdentity ? "Correct read" : "Wrong read";
+  const correct = result.correctIdentity;
+  const verdict = correct ? "Correct read" : "Wrong read";
 
   return (
     <section className="gamePanel reveal">
@@ -17,17 +18,22 @@ export function Reveal({ result, onRestart }: { result: ResultPayload; onRestart
           <h2>{verdict}</h2>
           <p>{getResultSummary(result)}</p>
         </div>
+        <span className={`verdictBadge ${correct ? "correct" : "wrong"}`} aria-label={verdict}>
+          {correct ? "✓" : "✗"}
+        </span>
       </div>
 
       <div className="scoreSummary" aria-label="Round score">
         <ScoreRow
           label="Identity"
-          note={result.correctIdentity ? "You identified who you were talking to." : "You picked the wrong opponent type."}
+          note={correct ? "You identified who you were talking to." : "You picked the wrong opponent type."}
+          tone={scoreTone(result.score.read.earned, result.score.read.possible)}
           value={`${result.score.read.earned}/${result.score.read.possible}`}
         />
         <ScoreRow
           label={isHumanRound ? "Location" : "Model"}
           note={isHumanRound ? getDistanceSummary(result.distanceKm) : "Exact model-family match."}
+          tone={scoreTone(result.score.round.earned, result.score.round.possible)}
           value={`${result.score.round.earned}/${result.score.round.possible}`}
         />
       </div>
@@ -54,6 +60,7 @@ function HumanReveal({ result }: { result: ResultPayload }) {
       {!guessedHuman && (
         <AnswerCard title="Your answer">
           <AnswerLine label="Read" value={formatIdentity(result.guess.identityGuess)} />
+          <AnswerLine label="Model family" value={result.guess.modelFamilyGuess || "No family picked"} />
           <AnswerLine label="Actual" value="Human" />
           <AnswerLine label="Location score" value="No location pin was scored because you guessed AI." />
         </AnswerCard>
@@ -93,18 +100,22 @@ function HumanReveal({ result }: { result: ResultPayload }) {
 }
 
 function AiReveal({ result }: { result: ResultPayload }) {
+  const guessedAi = result.guess.identityGuess === "AI";
+  const modelMatch = guessedAi && result.guess.modelFamilyGuess === result.actual.modelFamily;
+
   return (
     <div className="answerGrid">
+      <AnswerCard title="Your answer" tone={result.correctIdentity ? "correct" : "wrong"}>
+        <AnswerLine label="Opponent" value={formatIdentity(result.guess.identityGuess)} state={guessedAi ? "match" : "mismatch"} />
+        <AnswerLine
+          label="Model family"
+          state={guessedAi ? (modelMatch ? "match" : "mismatch") : undefined}
+          value={guessedAi ? result.guess.modelFamilyGuess || "No family picked" : "Not picked"}
+        />
+      </AnswerCard>
       <AnswerCard title="Actual answer">
         <AnswerLine label="Opponent" value="AI" />
         <AnswerLine label="Model family" value={result.actual.modelFamily || "Unknown"} />
-      </AnswerCard>
-      <AnswerCard title="Your answer">
-        <AnswerLine label="Opponent" value={formatIdentity(result.guess.identityGuess)} />
-        <AnswerLine
-          label="Model family"
-          value={result.guess.identityGuess === "AI" ? result.guess.modelFamilyGuess || "No family picked" : "Not picked"}
-        />
       </AnswerCard>
     </div>
   );
@@ -148,11 +159,13 @@ function ComparisonMap({ correctPin, guessPin }: { correctPin: Pin | null; guess
   const markersRef = useRef<L.Marker[]>([]);
 
   useEffect(() => {
-    if (!mapElementRef.current || mapRef.current) {
+    const element = mapElementRef.current;
+
+    if (!element || mapRef.current) {
       return;
     }
 
-    const map = L.map(mapElementRef.current, {
+    const map = L.map(element, {
       center: [20, 0],
       zoom: 2,
       zoomControl: false,
@@ -171,7 +184,14 @@ function ComparisonMap({ correctPin, guessPin }: { correctPin: Pin | null; guess
 
     mapRef.current = map;
 
+    // The reveal panel scrolls and reflows as it mounts, so the map container's
+    // size isn't final on the first paint. Re-sync Leaflet once it settles.
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
+
+    resizeObserver.observe(element);
+
     return () => {
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
       markersRef.current = [];
@@ -214,9 +234,20 @@ function ComparisonMap({ correctPin, guessPin }: { correctPin: Pin | null; guess
   return <div className="comparisonMap" ref={mapElementRef} />;
 }
 
-function ScoreRow({ label, note, value }: { label: string; note: string; value: string }) {
+type ScoreTone = "correct" | "partial" | "wrong";
+type LineState = "match" | "mismatch";
+
+function scoreTone(earned: number, possible: number): ScoreTone {
+  if (possible > 0 && earned >= possible) {
+    return "correct";
+  }
+
+  return earned > 0 ? "partial" : "wrong";
+}
+
+function ScoreRow({ label, note, tone, value }: { label: string; note: string; tone: ScoreTone; value: string }) {
   return (
-    <div className="scoreRow">
+    <div className={`scoreRow ${tone}`}>
       <div>
         <strong>{label}</strong>
         <span>{note}</span>
@@ -226,20 +257,23 @@ function ScoreRow({ label, note, value }: { label: string; note: string; value: 
   );
 }
 
-function AnswerCard({ children, title }: { children: React.ReactNode; title: string }) {
+function AnswerCard({ children, title, tone }: { children: React.ReactNode; title: string; tone?: ScoreTone }) {
   return (
-    <section className="answerCard">
+    <section className={`answerCard ${tone || ""}`}>
       <h3>{title}</h3>
       <dl>{children}</dl>
     </section>
   );
 }
 
-function AnswerLine({ label, value }: { label: string; value: string }) {
+function AnswerLine({ label, state, value }: { label: string; state?: LineState; value: string }) {
   return (
     <div>
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd className={state}>
+        {state && <span className="lineCue" aria-hidden="true">{state === "match" ? "✓" : "✗"}</span>}
+        {value}
+      </dd>
     </div>
   );
 }
