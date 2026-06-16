@@ -2,18 +2,54 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
 const http = require("http");
 const { Server } = require("socket.io");
 const { MODEL_FAMILIES, createAiProvider } = require("./aiAdapters");
+const {
+  CHAT_SECONDS,
+  FINAL_GUESS_MS,
+  FRONTEND_URL,
+  GUESS_GRACE_SECONDS,
+  MIN_MESSAGES_PER_SIDE,
+  PORT,
+  QUEUE_ESTIMATED_SECONDS,
+  TURN_MS,
+} = require("./config");
+const {
+  cryptoRandomId,
+  pick,
+  sleep,
+} = require("./utils");
+const {
+  createNoGuess,
+  revealSubmittedGuess,
+  sanitizePlayerId,
+  sanitizeSubmittedGuess,
+} = require("./sanitizers");
+const {
+  scoreAiGuess,
+  scoreHumanGuess,
+} = require("./scoring");
+const {
+  areHumanFinalGuessesDone,
+  buildSessionResumePayload,
+  getHumanPartnerSocketId,
+  getPersonalMessageCounts,
+  isGuessReady,
+  isSocketInSession,
+  markSubmitted,
+} = require("./sessionHelpers");
+const { registerAdminRoutes } = require("./admin");
+const { createQueueService } = require("./queue");
+const {
+  createAiResponseStatus,
+  getAiSendDelay,
+  markAiResponseStatus,
+  normalizeAiReplyResult,
+} = require("./aiRuntime");
 
 const app = express();
 const server = http.createServer(app);
-
-const PORT = process.env.PORT || 3000;
-const FRONTEND_URL = process.env.FRONTEND_URL || "*";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
-const CHAT_SECONDS = 90;
 
 const corsOptions = {
   origin: FRONTEND_URL,
@@ -42,169 +78,15 @@ app.get("/health", (req, res) => {
 const sessions = new Map();
 const waitingQueue = new Map();
 const socketSessions = new Map();
-const AI_FALLBACK_SECONDS = 20;
-const QUEUE_ESTIMATED_SECONDS = 8;
-const GUESS_GRACE_SECONDS = 300;
-const MIN_MESSAGES_PER_SIDE = 2;
-const TURN_SECONDS = 25;
-const TURN_MS = TURN_SECONDS * 1000;
-const AI_TYPING_MIN_RATIO = 0.05;
-const AI_TYPING_MAX_RATIO = 0.82;
-const AI_SEND_DEADLINE_BUFFER_MS = 750;
-const FINAL_GUESS_SECONDS = 25;
-const FINAL_GUESS_MS = FINAL_GUESS_SECONDS * 1000;
-const ADMIN_API_PATH = "/admin/host-monitor";
-const ADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
-const adminTokens = new Map();
-const adminPasswordHash = ADMIN_PASSWORD ? sha256(ADMIN_PASSWORD) : null;
-
-app.post(`${ADMIN_API_PATH}/login`, (req, res) => {
-  if (!adminPasswordHash) {
-    res.status(503).json({
-      error: "Admin password is not configured.",
-    });
-    return;
-  }
-
-  if (!isValidAdminPassword(req.body?.password)) {
-    res.status(401).json({
-      error: "Invalid admin login.",
-    });
-    return;
-  }
-
-  const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = Date.now() + ADMIN_TOKEN_TTL_MS;
-  adminTokens.set(token, expiresAt);
-  purgeExpiredAdminTokens();
-
-  res.json({
-    token,
-    expiresAt,
-  });
+const queueService = createQueueService({
+  waitingQueue,
+  socketSessions,
+  createAiSession,
+  createHumanSession,
+  findSessionByPlayerId,
+  resumeSession,
 });
-
-app.get(`${ADMIN_API_PATH}/rooms`, requireAdminAuth, (req, res) => {
-  res.json(buildAdminSnapshot());
-});
-
-function addToQueue(socket, payload = {}) {
-  if (socketSessions.has(socket.id)) {
-    return;
-  }
-
-  const playerId = sanitizePlayerId(payload.playerId);
-  socket.data.playerId = playerId;
-  const resumableSession = findSessionByPlayerId(playerId, payload.sessionId);
-
-  if (resumableSession) {
-    resumeSession(socket, {
-      playerId,
-      sessionId: resumableSession.id,
-    });
-    return;
-  }
-
-  if (waitingQueue.has(socket.id)) {
-    emitQueueStatus(waitingQueue.get(socket.id));
-    return;
-  }
-
-  removeQueuedPlayer(playerId);
-
-  const entry = {
-    socket,
-    playerId,
-    location: sanitizeLocation(payload.location),
-    queuedAt: Date.now(),
-    fallbackTimer: null,
-  };
-
-  if (!hasValidLocation(entry.location)) {
-    socket.emit("queue:error", {
-      code: "location_required",
-      message: "A valid rough IP location is required for human matchmaking.",
-    });
-    return;
-  }
-
-  waitingQueue.set(socket.id, entry);
-  emitQueueStatus(entry);
-  pairWaitingPlayers();
-
-  if (waitingQueue.has(socket.id)) {
-    entry.fallbackTimer = setTimeout(() => {
-      if (!waitingQueue.has(socket.id) || !socket.connected) {
-        return;
-      }
-
-      removeFromQueue(socket.id);
-      createAiSession(socket, entry.location, null, entry.queuedAt);
-    }, AI_FALLBACK_SECONDS * 1000);
-  }
-}
-
-function pairWaitingPlayers() {
-  const connectedEntries = [...waitingQueue.values()].filter((entry) => entry.socket.connected);
-
-  while (connectedEntries.length >= 2) {
-    const first = connectedEntries.shift();
-    const secondIndex = connectedEntries.findIndex((entry) => entry.playerId !== first?.playerId);
-    const second = secondIndex >= 0 ? connectedEntries.splice(secondIndex, 1)[0] : null;
-
-    if (!first || !second || first.socket.id === second.socket.id || first.playerId === second.playerId) {
-      continue;
-    }
-
-    removeFromQueue(first.socket.id);
-    removeFromQueue(second.socket.id);
-    createHumanSession(first, second);
-  }
-}
-
-function emitQueueStatus(entry) {
-  entry.socket.emit("queue:status", {
-    connectedProfiles: 1,
-    requiredProfiles: 2,
-    status: "searching",
-    queuedAt: entry.queuedAt,
-    estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
-  });
-}
-
-function emitMatchFound(entries) {
-  entries.forEach((entry) => {
-    entry.socket.emit("queue:status", {
-      connectedProfiles: 2,
-      requiredProfiles: 2,
-      status: "found",
-      queuedAt: entry.queuedAt,
-      estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
-    });
-  });
-}
-
-function removeFromQueue(socketId) {
-  const entry = waitingQueue.get(socketId);
-
-  if (!entry) {
-    return;
-  }
-
-  if (entry.fallbackTimer) {
-    clearTimeout(entry.fallbackTimer);
-  }
-
-  waitingQueue.delete(socketId);
-}
-
-function removeQueuedPlayer(playerId) {
-  for (const [socketId, entry] of waitingQueue.entries()) {
-    if (entry.playerId === playerId) {
-      removeFromQueue(socketId);
-    }
-  }
-}
+registerAdminRoutes(app, { sessions, waitingQueue });
 
 function createHumanSession(first, second) {
   const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
@@ -226,7 +108,6 @@ function createHumanSession(first, second) {
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
-    aiResponseStatus: createAiResponseStatus("idle"),
     timeout: null,
     expireTimer: null,
   };
@@ -236,7 +117,6 @@ function createHumanSession(first, second) {
   socketSessions.set(second.socket.id, session.id);
   first.socket.join(session.id);
   second.socket.join(session.id);
-  emitMatchFound([first, second]);
   scheduleChatEnd(session);
   scheduleSessionExpiry(session);
 
@@ -282,6 +162,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
+    aiResponseStatus: createAiResponseStatus("idle"),
     timeout: null,
     expireTimer: null,
   };
@@ -310,29 +191,6 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
   startTurn(session, pick([socket.id, "partner"]));
 
   return session;
-}
-
-function createRequestedAiSession(socket, payload = {}) {
-  if (socketSessions.has(socket.id)) {
-    return;
-  }
-
-  const queueEntry = waitingQueue.get(socket.id);
-  removeFromQueue(socket.id);
-
-  const playerId = sanitizePlayerId(payload.playerId);
-  const location = sanitizeLocation(payload.location);
-  socket.data.playerId = playerId;
-
-  if (!hasValidLocation(location)) {
-    socket.emit("queue:error", {
-      code: "location_required",
-      message: "A valid rough IP location is required for AI testing.",
-    });
-    return;
-  }
-
-  createAiSession(socket, location, payload.modelFamily, queueEntry?.queuedAt || Date.now());
 }
 
 function createHumanSessionPlayer(entry) {
@@ -487,155 +345,6 @@ function handleRoundLock(socket, payload = {}) {
   emitRoundLocked(session, socket.id);
 }
 
-function scoreHumanGuess(session, socketId, guess) {
-  const player = session.players[socketId];
-  const partnerSocketId = getHumanPartnerSocketId(session, socketId);
-  const partner = partnerSocketId ? session.players[partnerSocketId] : null;
-
-  if (!player || !partner) {
-    return null;
-  }
-
-  return buildScoreResult({
-    session,
-    guess,
-    actualParticipant: {
-      kind: "Human",
-      location: partner.location,
-    },
-  });
-}
-
-function scoreAiGuess(session, guess) {
-  return buildScoreResult({
-    session,
-    guess,
-    actualParticipant: session.participant,
-  });
-}
-
-function buildScoreResult({ session, guess, actualParticipant }) {
-  const actualType = actualParticipant.kind;
-  const identityGuess = guess.identityGuess === "Human" || guess.identityGuess === "AI" ? guess.identityGuess : null;
-  const correctIdentity = identityGuess === actualType;
-  const readScore = correctIdentity ? 1 : 0;
-  const roundType = actualType === "Human" ? "location" : "modelFamily";
-  const roundPossible = actualType === "Human" ? 100 : 1;
-  let distanceKm = null;
-  let roundScore = 0;
-
-  if (
-    actualType === "Human" &&
-    identityGuess === "Human" &&
-    Number.isFinite(guess.locationGuess?.lat) &&
-    Number.isFinite(guess.locationGuess?.lng) &&
-    Number.isFinite(actualParticipant.location?.lat) &&
-    Number.isFinite(actualParticipant.location?.lng)
-  ) {
-    distanceKm = haversineKm(
-      guess.locationGuess.lat,
-      guess.locationGuess.lng,
-      actualParticipant.location.lat,
-      actualParticipant.location.lng,
-    );
-    roundScore = Math.max(0, Math.round(100 * (1 - distanceKm / 10000)));
-  }
-
-  if (
-    actualType === "AI" &&
-    identityGuess === "AI" &&
-    guess.modelFamilyGuess === session.participant.modelFamily
-  ) {
-    roundScore = 1;
-  }
-
-  return {
-    sessionId: session.id,
-    correctIdentity,
-    score: {
-      read: {
-        earned: readScore,
-        possible: 1,
-      },
-      round: {
-        earned: roundScore,
-        possible: roundPossible,
-        type: roundType,
-      },
-    },
-    distanceKm: distanceKm === null ? null : Math.round(distanceKm),
-    guess: {
-      identityGuess,
-      locationGuess: guess.locationGuess,
-      modelFamilyGuess: guess.modelFamilyGuess,
-      submitted: Boolean(guess.submitted),
-    },
-    actual: revealParticipant(actualParticipant),
-    explanation: buildExplanation(actualParticipant, correctIdentity, distanceKm),
-  };
-}
-
-function revealParticipant(participant) {
-  if (participant.kind === "Human") {
-    const location = participant.location || {};
-
-    return {
-      participantType: "Human",
-      region: location.region,
-      country: location.country,
-      lat: location.lat,
-      lng: location.lng,
-    };
-  }
-
-  return {
-    participantType: "AI",
-    modelFamily: participant.modelFamily,
-  };
-}
-
-function buildExplanation(participant, correctIdentity, distanceKm) {
-  if (participant.kind === "Human") {
-    const location = participant.location || {};
-    const place = [location.region, location.country].filter(Boolean).join(", ") || "the partner's rough location";
-    const locationText =
-      distanceKm === null
-        ? "Your round score is 0/100 because no valid human-location comparison was available."
-        : `Your location score is based on a pin ${Math.round(distanceKm)} km from ${place}.`;
-
-    return `${correctIdentity ? "You called the identity correctly." : "The identity read was off."} ${locationText}`;
-  }
-
-  return `${correctIdentity ? "You spotted the AI." : "The identity read was off."} The AI round score is 1/1 only for the exact family: ${participant.modelFamily}.`;
-}
-
-function haversineKm(lat1, lng1, lat2, lng2) {
-  const earthRadiusKm = 6371;
-  const dLat = toRadians(lat2 - lat1);
-  const dLng = toRadians(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(lat1)) *
-      Math.cos(toRadians(lat2)) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return earthRadiusKm * c;
-}
-
-function toRadians(degrees) {
-  return (degrees * Math.PI) / 180;
-}
-
-function cryptoRandomId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function pick(values) {
-  return values[Math.floor(Math.random() * values.length)];
-}
-
 function findSessionByPlayerId(playerId, preferredSessionId = "") {
   if (!playerId) {
     return null;
@@ -674,7 +383,7 @@ function resumeSession(socket, payload = {}) {
   }
 
   socket.data.playerId = playerId;
-  removeQueuedPlayer(playerId);
+  queueService.removeQueuedPlayer(playerId);
 
   const socketId = reattachSessionSocket(session, playerId, socket);
 
@@ -757,56 +466,6 @@ function reattachSessionSocket(session, playerId, socket) {
   return socket.id;
 }
 
-function buildSessionResumePayload(session, socketId) {
-  const submitted = session.mode === "human"
-    ? Boolean(session.players[socketId]?.submitted)
-    : Boolean(session.submitted);
-
-  return {
-    sessionId: session.id,
-    chatEndsAt: session.chatEndsAt,
-    chatSeconds: CHAT_SECONDS,
-    intro: "An anonymous participant has joined.",
-    messages: serializeMessagesForSocket(session, socketId),
-    chatLocked: session.chatLocked,
-    finalGuessEndsAt: session.finalGuessEndsAt,
-    submitted,
-  };
-}
-
-function serializeMessagesForSocket(session, socketId) {
-  return session.messages.map((message, index) => ({
-    id: `${session.id}:${index}`,
-    author: getClientMessageAuthor(session, socketId, message.author),
-    text: message.text,
-    sentAt: message.sentAt,
-  }));
-}
-
-function getClientMessageAuthor(session, socketId, author) {
-  if (author === "system") {
-    return "system";
-  }
-
-  if (session.mode === "ai") {
-    return author === "partner" ? "partner" : "player";
-  }
-
-  return author === socketId ? "player" : "partner";
-}
-
-function isSocketInSession(session, socketId) {
-  if (!session) {
-    return false;
-  }
-
-  if (session.mode === "human") {
-    return Boolean(session.players[socketId]);
-  }
-
-  return session.playerSocketId === socketId;
-}
-
 function startTurn(session, owner) {
   if (!sessions.has(session.id) || session.ended) {
     return;
@@ -875,10 +534,11 @@ async function sendAiTurnMessage(sessionId) {
     return;
   }
 
-  const targetTypingMs = getAiTypingDelay(replyResult.text);
-  const elapsedMs = Date.now() - turnStartedAt;
-  const remainingMs = Math.max(0, session.turnEndsAt - Date.now() - AI_SEND_DEADLINE_BUFFER_MS);
-  const delayMs = Math.min(Math.max(0, targetTypingMs - elapsedMs), remainingMs);
+  const { delayMs, targetTypingMs } = getAiSendDelay({
+    replyText: replyResult.text,
+    turnStartedAt,
+    turnEndsAt: session.turnEndsAt,
+  });
 
   markAiResponseStatus(session, {
     state: "typing",
@@ -939,88 +599,6 @@ async function sendAiTurnMessage(sessionId) {
     message,
   });
   startTurn(session, session.playerSocketId);
-}
-
-function getAiTypingDelay(reply) {
-  const text = String(reply || "");
-  const chars = text.length;
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  const estimatedTypingMs = 850 + chars * 38 + words * 95;
-  const randomMultiplier = 0.72 + Math.random() * 0.58;
-  const randomJitterMs = randomInt(-220, 420);
-  const minMs = TURN_MS * AI_TYPING_MIN_RATIO;
-  const maxMs = TURN_MS * AI_TYPING_MAX_RATIO;
-
-  return Math.round(clamp(estimatedTypingMs * randomMultiplier + randomJitterMs, minMs, maxMs));
-}
-
-function normalizeAiReplyResult(value) {
-  if (typeof value === "string") {
-    return {
-      text: value,
-      source: "unknown",
-      failed: false,
-      error: null,
-      model: null,
-    };
-  }
-
-  if (typeof value === "object" && value !== null) {
-    return {
-      text: String(value.text || ""),
-      source: String(value.source || "unknown"),
-      failed: Boolean(value.failed),
-      error: value.error ? String(value.error).slice(0, 240) : null,
-      model: value.model ? String(value.model).slice(0, 120) : null,
-    };
-  }
-
-  return {
-    text: "",
-    source: "unknown",
-    failed: true,
-    error: "AI provider returned no response.",
-    model: null,
-  };
-}
-
-function createAiResponseStatus(state, overrides = {}) {
-  return {
-    state,
-    responseText: null,
-    source: null,
-    failed: false,
-    error: null,
-    model: null,
-    delayMs: null,
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function markAiResponseStatus(session, updates) {
-  if (session.mode !== "ai") {
-    return;
-  }
-
-  session.aiResponseStatus = {
-    ...createAiResponseStatus(session.aiResponseStatus?.state || "idle"),
-    ...session.aiResponseStatus,
-    ...updates,
-    updatedAt: Date.now(),
-  };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function handleTurnTimeout(sessionId, owner) {
@@ -1116,41 +694,6 @@ function buildTurnPayload(session, socketId, message = "") {
   };
 }
 
-function getMessageCounts(session) {
-  if (session.mode === "human") {
-    const socketIds = Object.keys(session.players);
-
-    return {
-      player: session.messages.filter((message) => message.author === socketIds[0]).length,
-      partner: session.messages.filter((message) => message.author === socketIds[1]).length,
-    };
-  }
-
-  return {
-    player: session.messages.filter((message) => message.author === session.playerSocketId).length,
-    partner: session.messages.filter((message) => message.author === "partner").length,
-  };
-}
-
-function getPersonalMessageCounts(session, socketId) {
-  if (session.mode === "human") {
-    const partnerSocketId = getHumanPartnerSocketId(session, socketId);
-
-    return {
-      player: session.messages.filter((message) => message.author === socketId).length,
-      partner: session.messages.filter((message) => message.author === partnerSocketId).length,
-    };
-  }
-
-  return getMessageCounts(session);
-}
-
-function isGuessReady(session) {
-  const counts = getMessageCounts(session);
-
-  return counts.player >= MIN_MESSAGES_PER_SIDE && counts.partner >= MIN_MESSAGES_PER_SIDE;
-}
-
 function startFinalGuessTimer(session) {
   if (session.finalGuessTimer) {
     clearTimeout(session.finalGuessTimer);
@@ -1206,6 +749,7 @@ function emitHumanResultsIfReady(session) {
       io.to(socketId).emit("session:result", {
         ...player.result,
         opponentGuess: partner ? revealSubmittedGuess(partner.guess) : null,
+        opponentActual: player ? revealHumanLocation(player.location) : null,
       });
     }
   });
@@ -1213,60 +757,20 @@ function emitHumanResultsIfReady(session) {
   deleteSession(session.id);
 }
 
-function areHumanFinalGuessesDone(session) {
-  return Object.values(session.players).every((player) => player.submitted);
+function revealHumanLocation(location = {}) {
+  return {
+    participantType: "Human",
+    region: location.region,
+    country: location.country,
+    lat: location.lat,
+    lng: location.lng,
+  };
 }
 
 function clearFinalGuessTimer(session) {
   if (session.finalGuessTimer) {
     clearTimeout(session.finalGuessTimer);
     session.finalGuessTimer = null;
-  }
-}
-
-function sanitizeSubmittedGuess(payload = {}) {
-  const identityGuess = payload.identityGuess === "Human" || payload.identityGuess === "AI" ? payload.identityGuess : null;
-
-  return {
-    identityGuess,
-    locationGuess: sanitizePin(payload.locationGuess),
-    modelFamilyGuess: MODEL_FAMILIES.includes(payload.modelFamilyGuess) ? payload.modelFamilyGuess : null,
-    submitted: Boolean(identityGuess),
-  };
-}
-
-function createNoGuess() {
-  return {
-    identityGuess: null,
-    locationGuess: null,
-    modelFamilyGuess: null,
-    submitted: false,
-  };
-}
-
-function revealSubmittedGuess(guess) {
-  if (!guess) {
-    return null;
-  }
-
-  return {
-    identityGuess: guess.identityGuess,
-    locationGuess: guess.locationGuess,
-    modelFamilyGuess: guess.modelFamilyGuess,
-    submitted: guess.submitted,
-  };
-}
-
-function notifySessionEnded(session, submitterSocketId, message = "Your partner locked a guess, so this round ended.") {
-  if (session.mode === "human") {
-    const partnerSocketId = getHumanPartnerSocketId(session, submitterSocketId);
-
-    if (partnerSocketId) {
-      io.to(partnerSocketId).emit("session:ended", {
-        sessionId: session.id,
-        message,
-      });
-    }
   }
 }
 
@@ -1311,21 +815,8 @@ function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The 
   });
 }
 
-function getHumanPartnerSocketId(session, socketId) {
-  return Object.keys(session.players).find((candidateId) => candidateId !== socketId) || null;
-}
-
-function markSubmitted(session, socketId) {
-  if (session.mode === "human") {
-    session.players[socketId].submitted = true;
-    return;
-  }
-
-  session.submitted = true;
-}
-
 function handleDisconnect(socket) {
-  removeFromQueue(socket.id);
+  queueService.removeFromQueue(socket.id);
 
   const sessionId = socketSessions.get(socket.id);
   const session = sessionId ? sessions.get(sessionId) : null;
@@ -1410,195 +901,14 @@ function scheduleSessionExpiry(session) {
   }, ttlMs);
 }
 
-function sanitizeLocation(value = {}) {
-  const location = typeof value === "object" && value !== null ? value : {};
-
-  return {
-    country: sanitizeText(location.country, "Unknown"),
-    region: sanitizeText(location.region, ""),
-    city: sanitizeText(location.city, ""),
-    lat: toFiniteRangeNumber(location.lat, -90, 90),
-    lng: toFiniteRangeNumber(location.lng, -180, 180),
-    source: "ip",
-  };
-}
-
-function sanitizePlayerId(value) {
-  if (typeof value !== "string") {
-    return cryptoRandomId();
-  }
-
-  const trimmed = value.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
-
-  return trimmed || cryptoRandomId();
-}
-
-function hasValidLocation(location) {
-  return Number.isFinite(location?.lat) && Number.isFinite(location?.lng);
-}
-
-function sanitizePin(value = {}) {
-  const pin = typeof value === "object" && value !== null ? value : {};
-  const lat = toFiniteRangeNumber(pin.lat, -90, 90);
-  const lng = toFiniteRangeNumber(pin.lng, -180, 180);
-
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return null;
-  }
-
-  return {
-    lat,
-    lng,
-  };
-}
-
-function sanitizeText(value, fallback) {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const trimmed = value.trim().slice(0, 80);
-
-  return trimmed || fallback;
-}
-
-function toFiniteRangeNumber(value, min, max) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number < min || number > max) {
-    return null;
-  }
-
-  return number;
-}
-
-function requireAdminAuth(req, res, next) {
-  const header = String(req.headers.authorization || "");
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  const token = match ? match[1] : "";
-  const expiresAt = token ? adminTokens.get(token) : null;
-
-  if (!expiresAt || expiresAt <= Date.now()) {
-    if (token) {
-      adminTokens.delete(token);
-    }
-
-    res.status(401).json({
-      error: "Admin login required.",
-    });
-    return;
-  }
-
-  next();
-}
-
-function isValidAdminPassword(value) {
-  if (!adminPasswordHash || typeof value !== "string") {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(sha256(value), adminPasswordHash);
-}
-
-function purgeExpiredAdminTokens() {
-  const now = Date.now();
-
-  for (const [token, expiresAt] of adminTokens.entries()) {
-    if (expiresAt <= now) {
-      adminTokens.delete(token);
-    }
-  }
-}
-
-function sha256(value) {
-  return crypto.createHash("sha256").update(String(value)).digest();
-}
-
-function buildAdminSnapshot() {
-  purgeExpiredAdminTokens();
-
-  return {
-    generatedAt: Date.now(),
-    waiting: [...waitingQueue.values()].map((entry) => ({
-      socketId: entry.socket.id,
-      connected: entry.socket.connected,
-      queuedAt: entry.queuedAt,
-      location: entry.location,
-    })),
-    rooms: [...sessions.values()].map(describeAdminRoom),
-  };
-}
-
-function describeAdminRoom(session) {
-  const participants = session.mode === "human"
-    ? Object.values(session.players).map((player, index) => ({
-        label: `Player ${index + 1}`,
-        socketId: player.socketId,
-        type: "Human",
-        location: player.location,
-        submitted: player.submitted,
-        disconnected: player.disconnected,
-      }))
-    : [
-        {
-          label: "Player",
-          socketId: session.playerSocketId,
-          type: "Human",
-          location: session.playerLocation,
-          submitted: session.submitted,
-          disconnected: session.disconnected,
-        },
-        {
-          label: "AI",
-          socketId: null,
-          type: "AI",
-          modelFamily: session.participant.modelFamily,
-          submitted: false,
-          disconnected: false,
-        },
-      ];
-
-  return {
-    id: session.id,
-    mode: session.mode,
-    createdAt: session.createdAt,
-    chatEndsAt: session.chatEndsAt,
-    aiResponseStatus: session.mode === "ai" ? session.aiResponseStatus : null,
-    participants,
-    messages: session.messages.map((message, index) => ({
-      id: `${session.id}:${index}`,
-      author: message.author,
-      authorLabel: getAdminAuthorLabel(session, message.author),
-      text: message.text,
-      sentAt: message.sentAt,
-      ai: message.ai || null,
-    })),
-  };
-}
-
-function getAdminAuthorLabel(session, author) {
-  if (session.mode === "ai") {
-    return author === "partner" ? "AI" : "Player";
-  }
-
-  const socketIds = Object.keys(session.players);
-  const index = socketIds.indexOf(author);
-
-  return index === -1 ? "Unknown" : `Player ${index + 1}`;
-}
-
 io.on("connection", (socket) => {
   socket.emit("connected", {
     socketId: socket.id,
   });
 
-  socket.on("queue:join", (payload = {}) => addToQueue(socket, payload));
-  socket.on("queue:test_ai", (payload = {}) => createRequestedAiSession(socket, payload));
-  socket.on("queue:leave", () => removeFromQueue(socket.id));
+  socket.on("queue:join", (payload = {}) => queueService.addToQueue(socket, payload));
+  socket.on("queue:test_ai", (payload = {}) => queueService.createRequestedAiSession(socket, payload));
+  socket.on("queue:leave", () => queueService.removeFromQueue(socket.id));
   socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
   socket.on("chat:message", (payload = {}) => handleChatMessage(socket, payload));
   socket.on("round:lock", (payload = {}) => handleRoundLock(socket, payload));
