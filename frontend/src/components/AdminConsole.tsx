@@ -21,6 +21,7 @@ import {
 } from "../utils";
 import { StatusPill } from "./StatusPill";
 import { TranscriptView } from "./TranscriptView";
+import { GuessSummary } from "./HistoryDetail";
 
 export function AdminConsole() {
   const [password, setPassword] = useState("");
@@ -271,6 +272,14 @@ function AdminHistoryPanel({ token }: { token: string }) {
   const games = data?.games ?? [];
   const dbDisabled = data ? data.enabled === false : false;
 
+  // Human-vs-human games store two rows under one session id. When both
+  // perspectives land on the same page, mark them as a matched pair.
+  const sessionCounts = new Map<string, number>();
+  games.forEach((game) => sessionCounts.set(game.sessionId, (sessionCounts.get(game.sessionId) || 0) + 1));
+  const pairedSessions = new Set(
+    [...sessionCounts.entries()].filter(([, count]) => count > 1).map(([sessionId]) => sessionId),
+  );
+
   return (
     <section className="adminPanel adminHistory">
       <div className="adminPanelHeader">
@@ -313,7 +322,11 @@ function AdminHistoryPanel({ token }: { token: string }) {
         <>
           <div className="adminHistoryList">
             {games.map((game) => (
-              <AdminHistoryRow key={`${game.playerId}:${game.sessionId}`} game={game} />
+              <AdminHistoryRow
+                key={`${game.playerId}:${game.sessionId}`}
+                game={game}
+                pairedOnPage={pairedSessions.has(game.sessionId)}
+              />
             ))}
           </div>
 
@@ -344,13 +357,13 @@ function AdminHistoryPanel({ token }: { token: string }) {
   );
 }
 
-function AdminHistoryRow({ game }: { game: AdminHistoryEntry }) {
+function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pairedOnPage: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const isHuman = game.opponentType === "Human";
   const messageCount = game.messageCount ?? game.transcript?.length ?? 0;
 
   return (
-    <div className={`adminHistoryEntry ${expanded ? "expanded" : ""}`}>
+    <div className={`adminHistoryEntry ${expanded ? "expanded" : ""} ${pairedOnPage ? "paired" : ""}`}>
       <button
         className="adminHistoryRow"
         type="button"
@@ -359,7 +372,22 @@ function AdminHistoryRow({ game }: { game: AdminHistoryEntry }) {
       >
         <span className="adminHistoryWhen">{formatTimestamp(new Date(game.playedAt).getTime())}</span>
         <code className="adminHistoryPlayer">{game.playerId}</code>
-        <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+        <span className="adminHistoryTagCell">
+          <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+          {isHuman && (
+            <span
+              className={`historyLinkGlyph ${pairedOnPage ? "matched" : ""}`}
+              title={
+                pairedOnPage
+                  ? "Same human-vs-human chat — both perspectives are on this page"
+                  : "Human-vs-human chat — the other player's perspective is a separate entry"
+              }
+              aria-label="Two-perspective human chat"
+            >
+              ⇌
+            </span>
+          )}
+        </span>
         <span className="historyMono">read {round1(game.readEarned)}/{game.readPossible}</span>
         <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
           {game.correctIdentity ? "✓" : "✗"}
@@ -368,6 +396,7 @@ function AdminHistoryRow({ game }: { game: AdminHistoryEntry }) {
       </button>
       {expanded && (
         <div className="historyChat">
+          <GuessSummary game={game} />
           <TranscriptView
             transcript={game.transcript}
             partnerLabel={isHuman ? "Opponent" : game.modelFamily || "AI"}

@@ -48,6 +48,7 @@ export function ChatRoom({
   onRestart: () => void;
 }) {
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const followLatestRef = useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canSend = draft.trim().length > 0 && isPlayerTurn && !isEnded && !isLocked;
@@ -82,6 +83,14 @@ export function ChatRoom({
       scrollMessagesToBottom("smooth");
     }
   }, [isEnded, isLocked, messages, showPartnerTyping]);
+
+  // When the turn flips back to the player, put the cursor straight in the
+  // composer so they can type without clicking to refocus.
+  useEffect(() => {
+    if (isPlayerTurn && !isEnded && !isLocked) {
+      inputRef.current?.focus();
+    }
+  }, [isPlayerTurn, isEnded, isLocked]);
 
   function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
     window.requestAnimationFrame(() => {
@@ -182,6 +191,7 @@ export function ChatRoom({
           )}
           <form className="composer" onSubmit={onSend}>
             <input
+              ref={inputRef}
               disabled={!isPlayerTurn}
               maxLength={400}
               value={draft}

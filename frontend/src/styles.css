@@ -47,9 +47,11 @@
 
   color: var(--text);
   background: var(--bg);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -1923,6 +1925,19 @@ button:disabled {
   text-align: right;
 }
 
+/* Second-guess outcome coloring, shared by the row score and the summary */
+.roundStatus-correct {
+  color: var(--green);
+}
+
+.roundStatus-partial {
+  color: var(--yellow);
+}
+
+.roundStatus-wrong {
+  color: var(--red);
+}
+
 /* Chat bubbles, shared by player history and the admin history panel */
 .chatTranscript {
   display: grid;
@@ -2287,7 +2302,7 @@ button:disabled {
 
 .adminHistoryRow {
   display: grid;
-  grid-template-columns: 150px minmax(90px, 1fr) 84px 116px 28px 78px;
+  grid-template-columns: 150px minmax(80px, 1fr) auto 116px 28px 78px;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -2323,6 +2338,28 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.adminHistoryTagCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.historyLinkGlyph {
+  color: var(--text-faint);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: help;
+}
+
+.historyLinkGlyph.matched {
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.adminHistoryEntry.paired .adminHistoryRow {
+  border-left: 2px solid var(--blue-line);
 }
 
 .adminHistoryCount {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { io, Socket } from "socket.io-client";
+import "@fontsource-variable/inter";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
 import {
