@@ -9,6 +9,7 @@ const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = Number(process.env.OPENROUTER_TIMEOUT_MS || 9000);
 const OPENROUTER_MAX_CONTEXT_MESSAGES = Number(process.env.OPENROUTER_MAX_CONTEXT_MESSAGES || 10);
 const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 256);
+const OPENROUTER_GUESS_MAX_TOKENS = Number(process.env.OPENROUTER_GUESS_MAX_TOKENS || 240);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4",
@@ -87,7 +88,120 @@ function createOpenRouterAiProvider(modelFamily, persona) {
         return buildFallbackReply(await fallback.generateReply(messages), model, error.message);
       }
     },
+    // A separate, out-of-character analytical call: after the chat, the AI judges
+    // whether the OTHER participant was human or AI. Returns raw structured fields
+    // (the server sanitizes them). Fails gracefully — no mock fallback.
+    async generateGuess(messages, options = {}) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+        const response = await fetch(OPENROUTER_CHAT_URL, {
+          method: "POST",
+          signal: controller.signal,
+          headers: buildOpenRouterHeaders(),
+          body: JSON.stringify({
+            model,
+            messages: buildGuessMessages(messages),
+            max_tokens: OPENROUTER_GUESS_MAX_TOKENS,
+            ...buildGuessReasoningConfig(),
+            temperature: 0.4,
+            top_p: 0.9,
+            response_format: { type: "json_object" },
+            session_id: options.sessionId || undefined,
+          }),
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const details = await response.text();
+          throw new Error(`OpenRouter ${response.status}: ${details.slice(0, 240)}`);
+        }
+
+        const data = await response.json();
+        const parsed = parseGuessJson(data?.choices?.[0]?.message?.content);
+
+        if (!parsed || (parsed.verdict !== "human" && parsed.verdict !== "ai")) {
+          return { failed: true, source: "openrouter", model, error: "Unparseable guess." };
+        }
+
+        return {
+          failed: false,
+          source: "openrouter",
+          model,
+          verdict: parsed.verdict,
+          latitude: parsed.latitude,
+          longitude: parsed.longitude,
+          place: parsed.place,
+          modelFamily: parsed.model,
+          reason: parsed.reason,
+        };
+      } catch (error) {
+        console.warn(`OpenRouter guess failed for ${modelFamily}: ${error.message}`);
+        return { failed: true, source: "openrouter", model, error: error.message };
+      }
+    },
   };
+}
+
+function buildGuessMessages(messages) {
+  const chat = messages
+    .slice(-OPENROUTER_MAX_CONTEXT_MESSAGES)
+    .filter((message) => message?.author !== "system" && message?.text)
+    .map((message) => ({
+      role: message.author === "partner" ? "assistant" : "user",
+      content: String(message.text).slice(0, 500),
+    }));
+
+  return [
+    {
+      role: "system",
+      content: [
+        "You just finished a short chat in a game where each side tries to tell whether the other is a human or an AI, and roughly where a human is from.",
+        "Analyze ONLY the other participant — the user-role messages. The assistant-role messages are your own.",
+        "Decide whether the other participant was a HUMAN or an AI language model, weighing vocabulary, slang, spelling, coherence, evasiveness, and how they reacted to suspicion.",
+        "If you think HUMAN: estimate where they are from as latitude and longitude plus a short place name.",
+        "If you think AI: pick the single most likely model family from exactly: ChatGPT, Gemini, Claude, Grok.",
+        "Respond with ONLY a compact JSON object and nothing else, in this exact shape:",
+        '{"verdict":"human"|"ai","latitude":number|null,"longitude":number|null,"place":string|null,"model":"ChatGPT"|"Gemini"|"Claude"|"Grok"|null,"reason":"one short sentence (max ~140 chars) on why"}',
+        "Always include a reason. Use null for fields that do not apply.",
+      ].join(" "),
+    },
+    ...chat,
+  ];
+}
+
+function parseGuessJson(content) {
+  if (typeof content !== "string") {
+    return null;
+  }
+
+  const text = content.trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return typeof parsed === "object" && parsed !== null
+      ? { ...parsed, verdict: String(parsed.verdict || "").toLowerCase() }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// A little reasoning sharpens the deduction, unlike the snappy chat replies.
+function buildGuessReasoningConfig() {
+  const effort = String(process.env.OPENROUTER_GUESS_REASONING_EFFORT || "low").toLowerCase();
+
+  if (["off", "none", "disabled", "false"].includes(effort)) {
+    return { reasoning: { enabled: false } };
+  }
+
+  return { reasoning: { effort } };
 }
 
 function buildFallbackReply(reply, model, error) {

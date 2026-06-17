@@ -9,6 +9,7 @@ const {
   AI_SEND_DEADLINE_BUFFER_MS,
   AI_LOCK_DELAY_MIN_MS,
   AI_LOCK_DELAY_MAX_MS,
+  AI_OPPONENT_GUESS_ENABLED,
   CHAT_SECONDS,
   FINAL_GUESS_MS,
   FRONTEND_URL,
@@ -127,6 +128,7 @@ function persistResultHistory(playerId, result, transcript = [], opponent = null
       opponentCorrectIdentity: opponent?.correctIdentity ?? null,
       opponentDistanceKm: opponent?.distanceKm ?? null,
       opponentModelFamilyGuess: opponent?.modelFamilyGuess ?? null,
+      opponentExplanation: opponent?.explanation ?? null,
       transcript,
     })
     .catch((error) => console.error("Failed to save game history:", error.message));
@@ -202,6 +204,166 @@ function persistHumanGameHistory(session) {
       buildOpponentGuessRecord(session, socketId),
     );
   });
+}
+
+// Fire off the AI's own end-of-game read of the human (in parallel with the
+// human's guessing window). Resolves to a sanitized guess+explanation, or a
+// { failed } marker — never throws.
+function startAiOpponentGuess(session) {
+  if (!AI_OPPONENT_GUESS_ENABLED || session.aiGuessStarted || session.mode !== "ai") {
+    return;
+  }
+
+  session.aiGuessStarted = true;
+
+  const adapter = session.participant?.adapter;
+
+  if (!adapter || typeof adapter.generateGuess !== "function") {
+    session.aiGuess = { failed: true };
+    return;
+  }
+
+  session.aiGuessPromise = (async () => {
+    try {
+      const raw = await adapter.generateGuess(session.messages, { sessionId: session.id });
+      session.aiGuess = interpretAiGuess(raw);
+    } catch (error) {
+      console.warn(`AI opponent guess failed for session ${session.id}: ${error.message}`);
+      session.aiGuess = { failed: true };
+    }
+
+    return session.aiGuess;
+  })();
+}
+
+// Turn the provider's raw fields into a sanitized guess (reusing the human
+// guess sanitizer) plus a trimmed explanation. Invalid/failed -> { failed }.
+function interpretAiGuess(raw) {
+  if (!raw || raw.failed) {
+    return { failed: true };
+  }
+
+  const verdict = String(raw.verdict || "").toLowerCase();
+  const identityGuess = verdict === "human" ? "Human" : verdict === "ai" ? "AI" : null;
+
+  if (!identityGuess) {
+    return { failed: true };
+  }
+
+  const guess = sanitizeSubmittedGuess({
+    identityGuess,
+    locationGuess: { lat: raw.latitude, lng: raw.longitude },
+    modelFamilyGuess: raw.modelFamily,
+  });
+  const explanation = typeof raw.reason === "string" ? raw.reason.trim().slice(0, 240) : "";
+
+  return { failed: false, guess, explanation };
+}
+
+// The AI's read of the human, in the same record shape persistResultHistory
+// expects for a human opponent (plus an explanation). Null when no valid guess.
+function buildAiOpponentRecord(session) {
+  const resolved = session.aiGuess && !session.aiGuess.failed ? session.aiGuess : null;
+
+  if (!resolved) {
+    return null;
+  }
+
+  const guess = resolved.guess;
+  const identityGuess = guess.identityGuess === "Human" || guess.identityGuess === "AI" ? guess.identityGuess : null;
+
+  if (!identityGuess) {
+    return null;
+  }
+
+  const location = session.playerLocation;
+  let distanceKm = null;
+
+  if (
+    identityGuess === "Human" &&
+    Number.isFinite(guess.locationGuess?.lat) &&
+    Number.isFinite(guess.locationGuess?.lng) &&
+    Number.isFinite(location?.lat) &&
+    Number.isFinite(location?.lng)
+  ) {
+    distanceKm = Math.round(
+      haversineKm(guess.locationGuess.lat, guess.locationGuess.lng, location.lat, location.lng),
+    );
+  }
+
+  return {
+    identityGuess,
+    correctIdentity: identityGuess === "Human", // the player really is human
+    distanceKm,
+    modelFamilyGuess: identityGuess === "AI" ? guess.modelFamilyGuess || null : null,
+    explanation: resolved.explanation || null,
+  };
+}
+
+// Emit the human's result for an AI game, attaching the AI's read of them. If the
+// AI's guess is still in flight, send it as pending and fill it in via a late
+// opponent:guess event — mirroring the human-vs-human flow. Persists + deletes once.
+function finalizeAiSession(session) {
+  if (session.aiFinalized) {
+    return;
+  }
+
+  if (!session.aiGuessStarted) {
+    // Feature disabled / no guess kicked off — plain result, no opponent section.
+    io.to(session.playerSocketId).emit("session:result", session.result);
+    completeAiSession(session);
+    return;
+  }
+
+  const pending = session.aiGuess === null; // still in flight
+  const resolved = session.aiGuess && !session.aiGuess.failed ? session.aiGuess : null;
+
+  io.to(session.playerSocketId).emit("session:result", {
+    ...session.result,
+    opponentActual: revealHumanLocation(session.playerLocation || {}),
+    opponentGuessEndsAt: session.finalGuessEndsAt || null,
+    opponentGuess: resolved ? revealSubmittedGuess(resolved.guess) : null,
+    opponentExplanation: resolved ? resolved.explanation : null,
+    opponentPending: pending,
+  });
+
+  if (!pending || !session.aiGuessPromise) {
+    completeAiSession(session);
+    return;
+  }
+
+  // Guess still running: keep the session alive and fill it in when it lands.
+  session.aiGuessPromise
+    .catch(() => {})
+    .then(() => {
+      emitAiGuessFill(session);
+      completeAiSession(session);
+    });
+}
+
+function emitAiGuessFill(session) {
+  const resolved = session.aiGuess && !session.aiGuess.failed ? session.aiGuess : null;
+
+  io.to(session.playerSocketId).emit("opponent:guess", {
+    sessionId: session.id,
+    opponentGuess: resolved ? revealSubmittedGuess(resolved.guess) : null,
+    opponentExplanation: resolved ? resolved.explanation : null,
+  });
+}
+
+function completeAiSession(session) {
+  if (session.aiFinalized) {
+    return;
+  }
+
+  session.aiFinalized = true;
+  persistResultHistory(
+    session.playerId,
+    session.result,
+    buildStoredTranscript(session, session.playerSocketId),
+    buildAiOpponentRecord(session),
+  );
+  deleteSession(session.id);
 }
 
 const sessions = new Map();
@@ -296,6 +458,10 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     aiLockPending: false,
     aiLockTimer: null,
     aiLockEligibleTurns: 0,
+    aiGuessStarted: false,
+    aiGuess: null,
+    aiGuessPromise: null,
+    aiFinalized: false,
     timeout: null,
     expireTimer: null,
   };
@@ -467,9 +633,7 @@ function handleGuessSubmit(socket, payload = {}) {
   session.guess = sanitizeSubmittedGuess(payload);
   session.result = scoreAiGuess(session, session.guess);
   session.submitted = true;
-  socket.emit("session:result", session.result);
-  persistResultHistory(session.playerId, session.result, buildStoredTranscript(session, session.playerSocketId));
-  deleteSession(session.id);
+  finalizeAiSession(session);
 }
 
 function handleRoundLock(socket, payload = {}) {
@@ -509,6 +673,12 @@ function lockChat(session, { by = null, message } = {}) {
   session.timeout = null;
   startFinalGuessTimer(session);
   emitRoundLocked(session, by, message);
+
+  // The AI now makes its own read of the human, in parallel with the human's
+  // guessing window, so it's usually ready by the time they submit.
+  if (session.mode === "ai") {
+    startAiOpponentGuess(session);
+  }
 }
 
 function clearAiLockTimer(session) {
@@ -1020,9 +1190,7 @@ function finalizeMissingGuesses(sessionId) {
     session.guess = createNoGuess();
     session.result = scoreAiGuess(session, session.guess);
     session.submitted = true;
-    io.to(session.playerSocketId).emit("session:result", session.result);
-    persistResultHistory(session.playerId, session.result, buildStoredTranscript(session, session.playerSocketId));
-    deleteSession(session.id);
+    finalizeAiSession(session);
   }
 }
 

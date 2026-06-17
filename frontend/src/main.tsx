@@ -388,11 +388,21 @@ function GameApp() {
       setPhase("reveal");
     });
 
-    socket.on("opponent:guess", (payload: { opponentGuess: ResultPayload["opponentGuess"] }) => {
-      setResult((current) =>
-        current ? { ...current, opponentGuess: payload.opponentGuess, opponentPending: false } : current,
-      );
-    });
+    socket.on(
+      "opponent:guess",
+      (payload: { opponentGuess: ResultPayload["opponentGuess"]; opponentExplanation?: string | null }) => {
+        setResult((current) =>
+          current
+            ? {
+                ...current,
+                opponentGuess: payload.opponentGuess,
+                opponentExplanation: payload.opponentExplanation ?? null,
+                opponentPending: false,
+              }
+            : current,
+        );
+      },
+    );
 
     socket.on("connect_error", () => {
       setConnection("offline");
@@ -591,11 +601,21 @@ function GameApp() {
       setPhase("reveal");
     });
 
-    socket.on("opponent:guess", (payload: { opponentGuess: ResultPayload["opponentGuess"] }) => {
-      setResult((current) =>
-        current ? { ...current, opponentGuess: payload.opponentGuess, opponentPending: false } : current,
-      );
-    });
+    socket.on(
+      "opponent:guess",
+      (payload: { opponentGuess: ResultPayload["opponentGuess"]; opponentExplanation?: string | null }) => {
+        setResult((current) =>
+          current
+            ? {
+                ...current,
+                opponentGuess: payload.opponentGuess,
+                opponentExplanation: payload.opponentExplanation ?? null,
+                opponentPending: false,
+              }
+            : current,
+        );
+      },
+    );
 
     socket.on("connect_error", () => {
       setConnection("offline");

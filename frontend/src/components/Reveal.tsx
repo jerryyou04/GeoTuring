@@ -107,19 +107,74 @@ function AiReveal({ result }: { result: ResultPayload }) {
   const modelMatch = guessedAi && result.guess.modelFamilyGuess === result.actual.modelFamily;
 
   return (
-    <div className="answerGrid">
-      <AnswerCard title="Your answer" tone={result.correctIdentity ? "correct" : "wrong"}>
-        <AnswerLine label="Opponent" value={formatIdentity(result.guess.identityGuess)} state={guessedAi ? "match" : "mismatch"} />
-        <AnswerLine
-          label="Model family"
-          state={guessedAi ? (modelMatch ? "match" : "mismatch") : undefined}
-          value={guessedAi ? result.guess.modelFamilyGuess || "No family picked" : "Not picked"}
+    <>
+      <div className="answerGrid">
+        <AnswerCard title="Your answer" tone={result.correctIdentity ? "correct" : "wrong"}>
+          <AnswerLine label="Opponent" value={formatIdentity(result.guess.identityGuess)} state={guessedAi ? "match" : "mismatch"} />
+          <AnswerLine
+            label="Model family"
+            state={guessedAi ? (modelMatch ? "match" : "mismatch") : undefined}
+            value={guessedAi ? result.guess.modelFamilyGuess || "No family picked" : "Not picked"}
+          />
+        </AnswerCard>
+        <AnswerCard title="Actual answer">
+          <AnswerLine label="Opponent" value="AI" />
+          <AnswerLine label="Model family" value={result.actual.modelFamily || "Unknown"} />
+        </AnswerCard>
+      </div>
+      <AiOpponentRead result={result} />
+    </>
+  );
+}
+
+// The flip side: the AI's own read of the human it was just talking to. Unlike a
+// human opponent, it also explains its reasoning.
+function AiOpponentRead({ result }: { result: ResultPayload }) {
+  const opponentGuess = result.opponentGuess;
+  const opponentPending = Boolean(result.opponentPending) && !opponentGuess;
+  const opponentActualPin = getActualPin(result.opponentActual || null);
+  const explanation = result.opponentExplanation;
+  const guessedHuman = opponentGuess?.identityGuess === "Human";
+
+  return (
+    <div className="aiOpponentRead">
+      <p className="roundLabel">Turning the tables</p>
+      <h3 className="aiOpponentReadTitle">The AI's read of you</h3>
+
+      {opponentPending ? (
+        <OpponentPendingCard
+          endsAt={result.opponentGuessEndsAt ?? null}
+          title="The AI's guess"
+          waitingText="The AI is deciding…"
         />
-      </AnswerCard>
-      <AnswerCard title="Actual answer">
-        <AnswerLine label="Opponent" value="AI" />
-        <AnswerLine label="Model family" value={result.actual.modelFamily || "Unknown"} />
-      </AnswerCard>
+      ) : opponentGuess ? (
+        guessedHuman ? (
+          <LocationComparison
+            correctLabel="Your rough location"
+            correctPin={opponentActualPin}
+            detail={
+              opponentGuess.locationGuess
+                ? "The AI pegged you as human and guessed where you're from."
+                : "The AI pegged you as human but placed no pin."
+            }
+            guessLabel="AI's pin"
+            guessPin={opponentGuess.locationGuess}
+            title="It read you as human ✓"
+          />
+        ) : (
+          <AnswerCard title="It thought you were AI ✗">
+            <AnswerLine label="Read" value={opponentGuess.submitted ? formatIdentity(opponentGuess.identityGuess) : "No guess"} />
+            <AnswerLine label="Guessed model" value={opponentGuess.modelFamilyGuess || "No family picked"} />
+          </AnswerCard>
+        )
+      ) : (
+        <AnswerCard title="The AI's guess">
+          <AnswerLine label="Read" value="Not available" />
+          <AnswerLine label="Detail" value="The AI's guess couldn't be fetched this round." />
+        </AnswerCard>
+      )}
+
+      {explanation && !opponentPending && <p className="explanation aiOpponentReason">“{explanation}”</p>}
     </div>
   );
 }
@@ -248,7 +303,15 @@ function scoreTone(earned: number, possible: number): ScoreTone {
   return earned > 0 ? "partial" : "wrong";
 }
 
-function OpponentPendingCard({ endsAt }: { endsAt: number | null }) {
+function OpponentPendingCard({
+  endsAt,
+  title = "Opponent's guess",
+  waitingText = "Waiting for their answer…",
+}: {
+  endsAt: number | null;
+  title?: string;
+  waitingText?: string;
+}) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -261,11 +324,11 @@ function OpponentPendingCard({ endsAt }: { endsAt: number | null }) {
 
   return (
     <section className="answerCard pending opponentPending">
-      <h3>Opponent's guess</h3>
+      <h3>{title}</h3>
       <div className="opponentPendingBody">
         <span className="opponentPendingSpinner" aria-hidden="true" />
         <div className="opponentPendingText">
-          <strong>Waiting for their answer…</strong>
+          <strong>{waitingText}</strong>
           <span>
             {secondsLeft === null
               ? "They are still deciding."

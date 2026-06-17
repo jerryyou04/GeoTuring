@@ -24,6 +24,10 @@ export function roundStatus(game: GameHistoryEntry): RoundStatus {
 // them back.
 export function GuessSummary({ game }: { game: GameHistoryEntry }) {
   const isHuman = game.opponentType === "Human";
+  // Human opponents always had a chance to read you. AI games only show the
+  // AI's read when it actually recorded one (skips old/failed games).
+  const showOpponentRead = isHuman || Boolean(game.opponentIdentityGuess);
+  const opponentLabel = isHuman ? "How they read you" : "How the AI read you";
 
   return (
     <div className="historySummary">
@@ -33,9 +37,9 @@ export function GuessSummary({ game }: { game: GameHistoryEntry }) {
           {describeYourSecondGuess(game)}
         </span>
       </div>
-      {isHuman && (
+      {showOpponentRead && (
         <div className="historySummaryItem">
-          <span className="historySummaryLabel">How they read you</span>
+          <span className="historySummaryLabel">{opponentLabel}</span>
           <span
             className={`historySummaryValue ${
               game.opponentIdentityGuess ? (game.opponentCorrectIdentity ? "roundStatus-correct" : "roundStatus-wrong") : ""
@@ -45,6 +49,7 @@ export function GuessSummary({ game }: { game: GameHistoryEntry }) {
           </span>
         </div>
       )}
+      {game.opponentExplanation && <p className="historySummaryReason">“{game.opponentExplanation}”</p>}
     </div>
   );
 }

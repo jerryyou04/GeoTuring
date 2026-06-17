@@ -10,6 +10,9 @@ module.exports = {
   ADMIN_TOKEN_TTL_MS: 12 * 60 * 60 * 1000,
   AI_FALLBACK_SECONDS: 20,
   AI_SEND_DEADLINE_BUFFER_MS: 750,
+  // After the chat, the AI makes its own guess about whether the human was human
+  // or AI (+ location/model + a reason). Set to "false" to disable.
+  AI_OPPONENT_GUESS_ENABLED: process.env.AI_OPPONENT_GUESS_ENABLED !== "false",
   // The AI can proactively "click guess" to end the chat, like a human can.
   // Probability is evaluated once per AI turn, but only once the round is
   // guess-ready (>= MIN_MESSAGES_PER_SIDE each), so the AI can never trigger

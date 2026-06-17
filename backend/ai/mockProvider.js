@@ -87,6 +87,11 @@ function createMockAiProvider(modelFamily, persona) {
         "i get what you mean",
       ]), persona));
     },
+    // The end-of-game "who was I talking to?" guess needs the real LLM. Without
+    // it, report a clean failure so the reveal shows a graceful unavailable state.
+    generateGuess() {
+      return { failed: true, source: "local", model: "mock", error: "AI guess unavailable in mock mode." };
+    },
   };
 }
 

@@ -74,6 +74,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_correct_identity BOOLEAN`);
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_distance_km INTEGER`);
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_model_family_guess TEXT`);
+  // The AI opponent (unlike a human) explains its read of you; humans store null.
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_explanation TEXT`);
 
   // Supports the admin's newest-first paginated sweep across every player.
   await pool.query(`
@@ -97,8 +99,8 @@ async function saveGameHistory(record) {
        read_earned, read_possible, round_type, round_earned, round_possible,
        distance_km, model_family, model_family_guess, actual_region, actual_country,
        opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
-       opponent_model_family_guess, transcript, message_count
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       opponent_model_family_guess, opponent_explanation, transcript, message_count
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      ON CONFLICT (player_id, session_id) DO NOTHING`,
     [
       record.playerId,
@@ -120,6 +122,7 @@ async function saveGameHistory(record) {
       record.opponentCorrectIdentity ?? null,
       record.opponentDistanceKm ?? null,
       record.opponentModelFamilyGuess ?? null,
+      record.opponentExplanation ?? null,
       JSON.stringify(transcript),
       transcript.length,
     ],
@@ -132,7 +135,7 @@ const HISTORY_COLUMNS = `player_id, session_id, played_at, opponent_type, identi
             read_earned, read_possible, round_type, round_earned, round_possible,
             distance_km, model_family, model_family_guess, actual_region, actual_country,
             opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
-            opponent_model_family_guess, transcript, message_count`;
+            opponent_model_family_guess, opponent_explanation, transcript, message_count`;
 
 // Shared row -> entry mapping so the player and admin views stay in sync.
 function mapHistoryRow(row, { includePlayerId = false } = {}) {
@@ -156,6 +159,7 @@ function mapHistoryRow(row, { includePlayerId = false } = {}) {
     opponentCorrectIdentity: row.opponent_correct_identity,
     opponentDistanceKm: row.opponent_distance_km === null ? null : Number(row.opponent_distance_km),
     opponentModelFamilyGuess: row.opponent_model_family_guess,
+    opponentExplanation: row.opponent_explanation,
     messageCount: row.message_count === null ? 0 : Number(row.message_count),
     transcript: Array.isArray(row.transcript) ? row.transcript : [],
   };

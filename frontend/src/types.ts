@@ -88,6 +88,7 @@ export interface ResultPayload {
     submitted: boolean;
   };
   opponentGuess: SubmittedGuess | null;
+  opponentExplanation?: string | null;
   opponentPending?: boolean;
   opponentGuessEndsAt?: number | null;
   actual: {
@@ -148,6 +149,7 @@ export interface GameHistoryEntry {
   opponentCorrectIdentity: boolean | null;
   opponentDistanceKm: number | null;
   opponentModelFamilyGuess: ModelFamily | null;
+  opponentExplanation: string | null;
   messageCount?: number;
   transcript?: StoredTranscriptMessage[];
 }
