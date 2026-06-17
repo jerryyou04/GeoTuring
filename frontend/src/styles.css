@@ -1837,8 +1837,115 @@ button:disabled {
 }
 
 .historyDetail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+
+.historyChevron {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+/* Expandable transcript */
+.historyEntry {
+  display: grid;
+  gap: 0;
+}
+
+.historyRowButton {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.historyRowButton:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.historyEntry.expanded .historyRowButton {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.historyChat {
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-bottom-left-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 14px 16px;
+}
+
+.historyChatMeta {
+  margin: 0 0 10px;
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Chat bubbles, shared by player history and the admin history panel */
+.chatTranscript {
+  display: grid;
+  gap: 8px;
+}
+
+.chatBubbleRow {
+  display: flex;
+}
+
+.chatBubbleRow.self {
+  justify-content: flex-end;
+}
+
+.chatBubbleRow.other {
+  justify-content: flex-start;
+}
+
+.chatBubble {
+  max-width: min(78%, 460px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.chatBubbleRow.self .chatBubble {
+  border-color: var(--blue-line);
+  background: var(--blue-weak);
+}
+
+.chatBubbleAuthor {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chatBubble p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.chatBubble time {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
 }
 
 /* ============================== Admin ================================= */
@@ -2121,6 +2228,91 @@ button:disabled {
 .emptyRooms {
   min-height: 180px;
   align-content: center;
+}
+
+/* Admin game-history archive */
+.adminHistory .adminPanelHeader {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.adminHistoryFilter {
+  display: flex;
+  gap: 8px;
+}
+
+.adminHistoryFilter input {
+  min-width: 220px;
+}
+
+.adminHistoryList {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.adminHistoryEntry {
+  display: grid;
+}
+
+.adminHistoryRow {
+  display: grid;
+  grid-template-columns: 150px minmax(90px, 1fr) 84px 116px 28px 78px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.adminHistoryRow:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.adminHistoryEntry.expanded .adminHistoryRow {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.adminHistoryWhen {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.adminHistoryPlayer {
+  color: var(--text);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adminHistoryCount {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.adminHistoryPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.adminHistoryPager span {
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 /* ============================== Responsive ============================ */

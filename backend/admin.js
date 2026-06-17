@@ -6,7 +6,7 @@ const {
 } = require("./config");
 const { sha256 } = require("./utils");
 
-function registerAdminRoutes(app, { sessions, waitingQueue }) {
+function registerAdminRoutes(app, { sessions, waitingQueue, db }) {
   const adminTokens = new Map();
   const adminPasswordHash = ADMIN_PASSWORD ? sha256(ADMIN_PASSWORD) : null;
 
@@ -40,6 +40,44 @@ function registerAdminRoutes(app, { sessions, waitingQueue }) {
     purgeExpiredAdminTokens(adminTokens);
     res.json(buildAdminSnapshot({ sessions, waitingQueue }));
   });
+
+  // Paginated history of every finished game across every player, newest first,
+  // with an optional partial player-id filter. Each row carries its transcript.
+  app.get(`${ADMIN_API_PATH}/history`, requireAdminAuth(adminTokens), async (req, res) => {
+    purgeExpiredAdminTokens(adminTokens);
+
+    if (!db || !db.isDbEnabled()) {
+      res.json({ enabled: false, total: 0, page: 1, pageSize: 0, games: [] });
+      return;
+    }
+
+    const pageSize = clampInt(req.query.pageSize, 25, 1, 100);
+    const page = clampInt(req.query.page, 1, 1, 100000);
+    const playerId = String(req.query.playerId || "").trim().slice(0, 64);
+
+    try {
+      const { total, games } = await db.getAllHistory({
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        playerId,
+      });
+
+      res.json({ enabled: true, total, page, pageSize, games });
+    } catch (error) {
+      console.error("Admin history query failed:", error.message);
+      res.status(500).json({ error: "history_unavailable" });
+    }
+  });
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, min), max);
 }
 
 function requireAdminAuth(adminTokens) {

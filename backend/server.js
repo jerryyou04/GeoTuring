@@ -42,6 +42,7 @@ const {
   isGuessReady,
   isSocketInSession,
   markSubmitted,
+  serializeMessagesForSocket,
 } = require("./sessionHelpers");
 const { registerAdminRoutes } = require("./admin");
 const { createQueueService } = require("./queue");
@@ -99,7 +100,7 @@ app.get("/api/history", async (req, res) => {
   }
 });
 
-function persistResultHistory(playerId, result) {
+function persistResultHistory(playerId, result, transcript = []) {
   if (!playerId || !result || !db.isDbEnabled()) {
     return;
   }
@@ -120,8 +121,15 @@ function persistResultHistory(playerId, result) {
       modelFamily: result.actual?.modelFamily || null,
       actualRegion: result.actual?.region || null,
       actualCountry: result.actual?.country || null,
+      transcript,
     })
     .catch((error) => console.error("Failed to save game history:", error.message));
+}
+
+// The stored transcript is the chat from this player's own perspective
+// ("player" / "partner"), so their history and the admin view read naturally.
+function buildStoredTranscript(session, socketId) {
+  return serializeMessagesForSocket(session, socketId);
 }
 
 const sessions = new Map();
@@ -135,7 +143,7 @@ const queueService = createQueueService({
   findSessionByPlayerId,
   resumeSession,
 });
-registerAdminRoutes(app, { sessions, waitingQueue });
+registerAdminRoutes(app, { sessions, waitingQueue, db });
 
 function createHumanSession(first, second) {
   const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
@@ -386,7 +394,7 @@ function handleGuessSubmit(socket, payload = {}) {
   session.result = scoreAiGuess(session, session.guess);
   session.submitted = true;
   socket.emit("session:result", session.result);
-  persistResultHistory(session.playerId, session.result);
+  persistResultHistory(session.playerId, session.result, buildStoredTranscript(session, session.playerSocketId));
   deleteSession(session.id);
 }
 
@@ -938,7 +946,7 @@ function finalizeMissingGuesses(sessionId) {
     session.result = scoreAiGuess(session, session.guess);
     session.submitted = true;
     io.to(session.playerSocketId).emit("session:result", session.result);
-    persistResultHistory(session.playerId, session.result);
+    persistResultHistory(session.playerId, session.result, buildStoredTranscript(session, session.playerSocketId));
     deleteSession(session.id);
   }
 }
@@ -962,7 +970,7 @@ function emitHumanPlayerResult(session, socketId) {
     opponentGuessEndsAt: session.finalGuessEndsAt || null,
   });
 
-  persistResultHistory(player.playerId, player.result);
+  persistResultHistory(player.playerId, player.result, buildStoredTranscript(session, socketId));
 }
 
 function emitOpponentGuessFill(session, socketId) {

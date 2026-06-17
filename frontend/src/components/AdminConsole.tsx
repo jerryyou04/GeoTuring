@@ -5,7 +5,12 @@ import {
   ADMIN_TOKEN_STORAGE_KEY,
   API_URL,
 } from "../config";
-import type { AdminRoom, AdminSnapshot } from "../types";
+import type {
+  AdminHistoryEntry,
+  AdminHistoryResponse,
+  AdminRoom,
+  AdminSnapshot,
+} from "../types";
 import {
   formatAiSource,
   formatAiState,
@@ -15,6 +20,7 @@ import {
   shortSocketId,
 } from "../utils";
 import { StatusPill } from "./StatusPill";
+import { TranscriptView } from "./TranscriptView";
 
 export function AdminConsole() {
   const [password, setPassword] = useState("");
@@ -148,13 +154,21 @@ export function AdminConsole() {
           {error && <p className="adminError">{error}</p>}
         </section>
       ) : (
-        <AdminDashboard error={error} snapshot={snapshot} />
+        <AdminDashboard error={error} snapshot={snapshot} token={token} />
       )}
     </main>
   );
 }
 
-function AdminDashboard({ error, snapshot }: { error: string; snapshot: AdminSnapshot | null }) {
+function AdminDashboard({
+  error,
+  snapshot,
+  token,
+}: {
+  error: string;
+  snapshot: AdminSnapshot | null;
+  token: string;
+}) {
   return (
     <section className="adminDashboard">
       <div className="adminSummary">
@@ -194,8 +208,178 @@ function AdminDashboard({ error, snapshot }: { error: string; snapshot: AdminSna
           </div>
         )}
       </section>
+
+      <AdminHistoryPanel token={token} />
     </section>
   );
+}
+
+const HISTORY_PAGE_SIZE = 25;
+
+function AdminHistoryPanel({ token }: { token: string }) {
+  const [page, setPage] = useState(1);
+  const [filterInput, setFilterInput] = useState("");
+  const [appliedFilter, setAppliedFilter] = useState("");
+  const [data, setData] = useState<AdminHistoryResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(HISTORY_PAGE_SIZE),
+    });
+
+    if (appliedFilter) {
+      params.set("playerId", appliedFilter);
+    }
+
+    fetch(`${API_URL}${ADMIN_API_PATH}/history?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`status ${response.status}`))))
+      .then((payload: AdminHistoryResponse) => {
+        if (!cancelled) {
+          setData(payload);
+          setError("");
+          setLoading(false);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load history.");
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, page, appliedFilter]);
+
+  function applyFilter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPage(1);
+    setAppliedFilter(filterInput.trim());
+  }
+
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+  const games = data?.games ?? [];
+  const dbDisabled = data ? data.enabled === false : false;
+
+  return (
+    <section className="adminPanel adminHistory">
+      <div className="adminPanelHeader">
+        <div>
+          <p className="roundLabel">Archive</p>
+          <h2>Game history</h2>
+        </div>
+        <form className="adminHistoryFilter" onSubmit={applyFilter}>
+          <input
+            onChange={(event) => setFilterInput(event.target.value)}
+            placeholder="Filter by player id…"
+            value={filterInput}
+          />
+          <button className="secondaryButton" type="submit">Search</button>
+          {appliedFilter && (
+            <button
+              className="secondaryButton"
+              type="button"
+              onClick={() => {
+                setFilterInput("");
+                setAppliedFilter("");
+                setPage(1);
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </form>
+      </div>
+
+      {dbDisabled ? (
+        <p className="emptyTranscript">History storage isn't configured on the server.</p>
+      ) : error ? (
+        <p className="adminError">{error}</p>
+      ) : loading && !data ? (
+        <p className="emptyTranscript">Loading history…</p>
+      ) : games.length === 0 ? (
+        <p className="emptyTranscript">No games recorded{appliedFilter ? " for that player" : ""} yet.</p>
+      ) : (
+        <>
+          <div className="adminHistoryList">
+            {games.map((game) => (
+              <AdminHistoryRow key={`${game.playerId}:${game.sessionId}`} game={game} />
+            ))}
+          </div>
+
+          <div className="adminHistoryPager">
+            <button
+              className="secondaryButton"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              type="button"
+            >
+              ← Prev
+            </button>
+            <span>
+              Page {page} of {totalPages} · {total} game{total === 1 ? "" : "s"}
+            </span>
+            <button
+              className="secondaryButton"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+              type="button"
+            >
+              Next →
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function AdminHistoryRow({ game }: { game: AdminHistoryEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const isHuman = game.opponentType === "Human";
+  const messageCount = game.messageCount ?? game.transcript?.length ?? 0;
+
+  return (
+    <div className={`adminHistoryEntry ${expanded ? "expanded" : ""}`}>
+      <button
+        className="adminHistoryRow"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="adminHistoryWhen">{formatTimestamp(new Date(game.playedAt).getTime())}</span>
+        <code className="adminHistoryPlayer">{game.playerId}</code>
+        <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+        <span className="historyMono">read {round1(game.readEarned)}/{game.readPossible}</span>
+        <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
+          {game.correctIdentity ? "✓" : "✗"}
+        </span>
+        <span className="adminHistoryCount">{messageCount} msg{expanded ? " ▾" : " ▸"}</span>
+      </button>
+      {expanded && (
+        <div className="historyChat">
+          <TranscriptView
+            transcript={game.transcript}
+            partnerLabel={isHuman ? "Opponent" : game.modelFamily || "AI"}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function round1(value: number) {
+  return Math.round(value * 10) / 10;
 }
 
 function AdminMetric({ label, value }: { label: string; value: string | number }) {

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { API_URL } from "../config";
 import { loadOrCreatePlayerId } from "../storage";
 import type { GameHistoryEntry } from "../types";
+import { TranscriptView } from "./TranscriptView";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
 
@@ -109,19 +110,42 @@ function HistoryList({ games }: { games: GameHistoryEntry[] }) {
 
 function HistoryRow({ game }: { game: GameHistoryEntry }) {
   const isHuman = game.opponentType === "Human";
+  const [expanded, setExpanded] = useState(false);
+  const messageCount = game.messageCount ?? game.transcript?.length ?? 0;
 
   return (
-    <div className="historyRow">
-      <span className="historyWhen">{formatPlayedAt(game.playedAt)}</span>
-      <span>
-        <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
-      </span>
-      <span className="historyMono">{formatScore(game.readEarned)}/{game.readPossible}</span>
-      <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
-        {game.correctIdentity ? "✓ Correct" : "✗ Wrong"}
-      </span>
-      <span className="historyMono">{formatScore(game.roundEarned)}/{game.roundPossible}</span>
-      <span className="historyDetail">{formatDetail(game)}</span>
+    <div className={`historyEntry ${expanded ? "expanded" : ""}`}>
+      <button
+        className="historyRow historyRowButton"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="historyWhen">{formatPlayedAt(game.playedAt)}</span>
+        <span>
+          <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+        </span>
+        <span className="historyMono">{formatScore(game.readEarned)}/{game.readPossible}</span>
+        <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
+          {game.correctIdentity ? "✓ Correct" : "✗ Wrong"}
+        </span>
+        <span className="historyMono">{formatScore(game.roundEarned)}/{game.roundPossible}</span>
+        <span className="historyDetail">
+          {formatDetail(game)}
+          <span className="historyChevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+        </span>
+      </button>
+      {expanded && (
+        <div className="historyChat">
+          <p className="historyChatMeta">
+            {messageCount > 0 ? `${messageCount} message${messageCount === 1 ? "" : "s"}` : "Transcript"}
+          </p>
+          <TranscriptView
+            transcript={game.transcript}
+            partnerLabel={isHuman ? "Opponent" : game.modelFamily || "AI"}
+          />
+        </div>
+      )}
     </div>
   );
 }

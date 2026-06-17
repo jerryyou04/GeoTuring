@@ -61,6 +61,18 @@ async function initDb() {
       ON game_history (player_id, played_at DESC);
   `);
 
+  // The full chat transcript (from the player's own perspective) is stored
+  // alongside the scored result. Added after launch, so existing rows keep a
+  // null transcript and a 0 count.
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS transcript JSONB`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS message_count INTEGER NOT NULL DEFAULT 0`);
+
+  // Supports the admin's newest-first paginated sweep across every player.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_game_history_played_at
+      ON game_history (played_at DESC);
+  `);
+
   console.log("Game history table is ready.");
 }
 
@@ -69,12 +81,15 @@ async function saveGameHistory(record) {
     return;
   }
 
+  const transcript = Array.isArray(record.transcript) ? record.transcript : [];
+
   await pool.query(
     `INSERT INTO game_history (
        player_id, session_id, opponent_type, identity_guess, correct_identity,
        read_earned, read_possible, round_type, round_earned, round_possible,
-       distance_km, model_family, actual_region, actual_country
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       distance_km, model_family, actual_region, actual_country,
+       transcript, message_count
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      ON CONFLICT (player_id, session_id) DO NOTHING`,
     [
       record.playerId,
@@ -91,27 +106,15 @@ async function saveGameHistory(record) {
       record.modelFamily,
       record.actualRegion,
       record.actualCountry,
+      JSON.stringify(transcript),
+      transcript.length,
     ],
   );
 }
 
-async function getPlayerHistory(playerId, limit = 100) {
-  if (!enabled) {
-    return [];
-  }
-
-  const result = await pool.query(
-    `SELECT session_id, played_at, opponent_type, identity_guess, correct_identity,
-            read_earned, read_possible, round_type, round_earned, round_possible,
-            distance_km, model_family, actual_region, actual_country
-       FROM game_history
-      WHERE player_id = $1
-      ORDER BY played_at DESC
-      LIMIT $2`,
-    [playerId, Math.min(Math.max(1, limit), 200)],
-  );
-
-  return result.rows.map((row) => ({
+// Shared row -> entry mapping so the player and admin views stay in sync.
+function mapHistoryRow(row, { includePlayerId = false } = {}) {
+  const entry = {
     sessionId: row.session_id,
     playedAt: row.played_at,
     opponentType: row.opponent_type,
@@ -126,7 +129,71 @@ async function getPlayerHistory(playerId, limit = 100) {
     modelFamily: row.model_family,
     actualRegion: row.actual_region,
     actualCountry: row.actual_country,
-  }));
+    messageCount: row.message_count === null ? 0 : Number(row.message_count),
+    transcript: Array.isArray(row.transcript) ? row.transcript : [],
+  };
+
+  if (includePlayerId) {
+    entry.playerId = row.player_id;
+  }
+
+  return entry;
+}
+
+async function getPlayerHistory(playerId, limit = 100) {
+  if (!enabled) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `SELECT session_id, played_at, opponent_type, identity_guess, correct_identity,
+            read_earned, read_possible, round_type, round_earned, round_possible,
+            distance_km, model_family, actual_region, actual_country,
+            transcript, message_count
+       FROM game_history
+      WHERE player_id = $1
+      ORDER BY played_at DESC
+      LIMIT $2`,
+    [playerId, Math.min(Math.max(1, limit), 200)],
+  );
+
+  return result.rows.map((row) => mapHistoryRow(row));
+}
+
+// Admin sweep across every player's games, newest first, with optional filter
+// on a (partial) player id. Returns the page plus the total for pagination.
+async function getAllHistory({ limit = 25, offset = 0, playerId = "" } = {}) {
+  if (!enabled) {
+    return { total: 0, games: [] };
+  }
+
+  const pageSize = Math.min(Math.max(1, limit), 100);
+  const pageOffset = Math.max(0, offset);
+  const filter = String(playerId || "").trim();
+  const where = filter ? `WHERE player_id ILIKE $1` : "";
+  const filterParams = filter ? [`%${filter}%`] : [];
+
+  const totalResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM game_history ${where}`,
+    filterParams,
+  );
+
+  const rowsResult = await pool.query(
+    `SELECT player_id, session_id, played_at, opponent_type, identity_guess, correct_identity,
+            read_earned, read_possible, round_type, round_earned, round_possible,
+            distance_km, model_family, actual_region, actual_country,
+            transcript, message_count
+       FROM game_history
+       ${where}
+      ORDER BY played_at DESC
+      LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2}`,
+    [...filterParams, pageSize, pageOffset],
+  );
+
+  return {
+    total: totalResult.rows[0]?.total ?? 0,
+    games: rowsResult.rows.map((row) => mapHistoryRow(row, { includePlayerId: true })),
+  };
 }
 
 module.exports = {
@@ -134,4 +201,5 @@ module.exports = {
   initDb,
   saveGameHistory,
   getPlayerHistory,
+  getAllHistory,
 };

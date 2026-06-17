@@ -121,6 +121,13 @@ export interface Pin {
   lng: number;
 }
 
+export interface StoredTranscriptMessage {
+  id?: string;
+  author: "player" | "partner" | "system";
+  text: string;
+  sentAt: number;
+}
+
 export interface GameHistoryEntry {
   sessionId: string;
   playedAt: string;
@@ -136,6 +143,20 @@ export interface GameHistoryEntry {
   modelFamily: ModelFamily | null;
   actualRegion: string | null;
   actualCountry: string | null;
+  messageCount?: number;
+  transcript?: StoredTranscriptMessage[];
+}
+
+export interface AdminHistoryEntry extends GameHistoryEntry {
+  playerId: string;
+}
+
+export interface AdminHistoryResponse {
+  enabled: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  games: AdminHistoryEntry[];
 }
 
 export interface PersistentScore {

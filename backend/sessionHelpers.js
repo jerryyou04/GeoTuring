@@ -111,4 +111,5 @@ module.exports = {
   isGuessReady,
   isSocketInSession,
   markSubmitted,
+  serializeMessagesForSocket,
 };
