@@ -8,7 +8,7 @@ const { createMockAiProvider } = require("./mockProvider");
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = Number(process.env.OPENROUTER_TIMEOUT_MS || 9000);
 const OPENROUTER_MAX_CONTEXT_MESSAGES = Number(process.env.OPENROUTER_MAX_CONTEXT_MESSAGES || 10);
-const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 120);
+const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 256);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4",
@@ -186,7 +186,7 @@ function getModelSlug(modelFamily) {
 // OPENROUTER_REASONING_EFFORT: "minimal" | "low" | "medium" | "high", or
 // "off" to disable thinking entirely (best for snappy casual chat). Defaults to "low".
 function buildReasoningConfig() {
-  const effort = String(process.env.OPENROUTER_REASONING_EFFORT || "low").toLowerCase();
+  const effort = String(process.env.OPENROUTER_REASONING_EFFORT || "off").toLowerCase();
 
   if (["off", "none", "disabled", "false"].includes(effort)) {
     return { reasoning: { enabled: false } };
