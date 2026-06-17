@@ -9,7 +9,10 @@ const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = Number(process.env.OPENROUTER_TIMEOUT_MS || 9000);
 const OPENROUTER_MAX_CONTEXT_MESSAGES = Number(process.env.OPENROUTER_MAX_CONTEXT_MESSAGES || 10);
 const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 256);
-const OPENROUTER_GUESS_MAX_TOKENS = Number(process.env.OPENROUTER_GUESS_MAX_TOKENS || 240);
+const OPENROUTER_GUESS_MAX_TOKENS = Number(process.env.OPENROUTER_GUESS_MAX_TOKENS || 700);
+// The end-of-game guess runs during the 25s final-guess window, so it gets a
+// longer ceiling than the snappy chat reply.
+const OPENROUTER_GUESS_TIMEOUT_MS = Number(process.env.OPENROUTER_GUESS_TIMEOUT_MS || 15000);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4",
@@ -90,83 +93,102 @@ function createOpenRouterAiProvider(modelFamily, persona) {
     },
     // A separate, out-of-character analytical call: after the chat, the AI judges
     // whether the OTHER participant was human or AI. Returns raw structured fields
-    // (the server sanitizes them). Fails gracefully — no mock fallback.
-    async generateGuess(messages, options = {}) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
-        const response = await fetch(OPENROUTER_CHAT_URL, {
-          method: "POST",
-          signal: controller.signal,
-          headers: buildOpenRouterHeaders(),
-          body: JSON.stringify({
-            model,
-            messages: buildGuessMessages(messages),
-            max_tokens: OPENROUTER_GUESS_MAX_TOKENS,
-            ...buildGuessReasoningConfig(),
-            temperature: 0.4,
-            top_p: 0.9,
-            response_format: { type: "json_object" },
-            session_id: options.sessionId || undefined,
-          }),
-        });
-        clearTimeout(timeout);
+    // (the server sanitizes them). Fails gracefully — no mock fallback. Mirrors the
+    // reliable chat call: no response_format, reasoning off by default. Retries once
+    // since it runs during the generous final-guess window.
+    async generateGuess(messages) {
+      const first = await attemptGuess(modelFamily, model, messages);
 
-        if (!response.ok) {
-          const details = await response.text();
-          throw new Error(`OpenRouter ${response.status}: ${details.slice(0, 240)}`);
-        }
-
-        const data = await response.json();
-        const parsed = parseGuessJson(data?.choices?.[0]?.message?.content);
-
-        if (!parsed || (parsed.verdict !== "human" && parsed.verdict !== "ai")) {
-          return { failed: true, source: "openrouter", model, error: "Unparseable guess." };
-        }
-
-        return {
-          failed: false,
-          source: "openrouter",
-          model,
-          verdict: parsed.verdict,
-          latitude: parsed.latitude,
-          longitude: parsed.longitude,
-          place: parsed.place,
-          modelFamily: parsed.model,
-          reason: parsed.reason,
-        };
-      } catch (error) {
-        console.warn(`OpenRouter guess failed for ${modelFamily}: ${error.message}`);
-        return { failed: true, source: "openrouter", model, error: error.message };
+      if (!first.failed) {
+        return first;
       }
+
+      const second = await attemptGuess(modelFamily, model, messages);
+      return second.failed ? first : second;
     },
   };
 }
 
+async function attemptGuess(modelFamily, model, messages) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OPENROUTER_GUESS_TIMEOUT_MS);
+    const response = await fetch(OPENROUTER_CHAT_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: buildOpenRouterHeaders(),
+      body: JSON.stringify({
+        model,
+        messages: buildGuessMessages(messages),
+        max_tokens: OPENROUTER_GUESS_MAX_TOKENS,
+        ...buildGuessReasoningConfig(),
+        temperature: 0.4,
+        top_p: 0.9,
+      }),
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const details = await response.text();
+      throw new Error(`OpenRouter ${response.status}: ${details.slice(0, 240)}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    const parsed = parseGuessJson(content);
+
+    if (!parsed || (parsed.verdict !== "human" && parsed.verdict !== "ai")) {
+      console.warn(
+        `OpenRouter guess unparseable for ${modelFamily} (${model}): ${String(content || "").slice(0, 200)}`,
+      );
+      return { failed: true, source: "openrouter", model, error: "Unparseable guess." };
+    }
+
+    return {
+      failed: false,
+      source: "openrouter",
+      model,
+      verdict: parsed.verdict,
+      latitude: parsed.latitude,
+      longitude: parsed.longitude,
+      place: parsed.place,
+      modelFamily: parsed.model,
+      reason: parsed.reason,
+    };
+  } catch (error) {
+    console.warn(`OpenRouter guess failed for ${modelFamily} (${model}): ${error.message}`);
+    return { failed: true, source: "openrouter", model, error: error.message };
+  }
+}
+
 function buildGuessMessages(messages) {
-  const chat = messages
-    .slice(-OPENROUTER_MAX_CONTEXT_MESSAGES)
+  // Flatten the chat into labelled lines inside ONE user message, so the model
+  // treats it as a transcript to ANALYZE rather than a conversation to continue
+  // (role-mapped turns made some models just reply in character).
+  const transcript = messages
     .filter((message) => message?.author !== "system" && message?.text)
-    .map((message) => ({
-      role: message.author === "partner" ? "assistant" : "user",
-      content: String(message.text).slice(0, 500),
-    }));
+    .slice(-OPENROUTER_MAX_CONTEXT_MESSAGES)
+    .map((message) => `${message.author === "partner" ? "YOU" : "THEM"}: ${String(message.text).slice(0, 500)}`)
+    .join("\n");
 
   return [
     {
       role: "system",
       content: [
-        "You just finished a short chat in a game where each side tries to tell whether the other is a human or an AI, and roughly where a human is from.",
-        "Analyze ONLY the other participant — the user-role messages. The assistant-role messages are your own.",
-        "Decide whether the other participant was a HUMAN or an AI language model, weighing vocabulary, slang, spelling, coherence, evasiveness, and how they reacted to suspicion.",
-        "If you think HUMAN: estimate where they are from as latitude and longitude plus a short place name.",
-        "If you think AI: pick the single most likely model family from exactly: ChatGPT, Gemini, Claude, Grok.",
-        "Respond with ONLY a compact JSON object and nothing else, in this exact shape:",
+        "You are analyzing a finished chat transcript from a game where each side tries to tell whether the other is a human or an AI, and roughly where a human is from.",
+        "In the transcript, lines marked YOU are your own past messages and lines marked THEM are the other participant. Judge ONLY THEM.",
+        "Decide whether THEM was a HUMAN or an AI language model, weighing vocabulary, slang, spelling, coherence, evasiveness, and how they reacted to suspicion.",
+        "If HUMAN: estimate where they are from as latitude and longitude plus a short place name.",
+        "If AI: pick the single most likely model family from exactly: ChatGPT, Gemini, Claude, Grok.",
+        "Output ONLY a compact JSON object — no prose, no markdown, no code fences — in this exact shape:",
         '{"verdict":"human"|"ai","latitude":number|null,"longitude":number|null,"place":string|null,"model":"ChatGPT"|"Gemini"|"Claude"|"Grok"|null,"reason":"one short sentence (max ~140 chars) on why"}',
         "Always include a reason. Use null for fields that do not apply.",
       ].join(" "),
     },
-    ...chat,
+    {
+      role: "user",
+      content: `Transcript:\n${transcript}\n\nReturn only the JSON verdict about THEM.`,
+    },
   ];
 }
 
@@ -193,12 +215,16 @@ function parseGuessJson(content) {
   }
 }
 
-// A little reasoning sharpens the deduction, unlike the snappy chat replies.
+// By default we OMIT the reasoning field entirely and let each model use its own
+// default. Some models (e.g. gemini-3.5-flash) reject reasoning:{enabled:false}
+// with "Reasoning is mandatory for this endpoint", so we must not force it off.
+// Set OPENROUTER_GUESS_REASONING_EFFORT to a real effort (minimal/low/medium/high)
+// to opt in explicitly.
 function buildGuessReasoningConfig() {
-  const effort = String(process.env.OPENROUTER_GUESS_REASONING_EFFORT || "low").toLowerCase();
+  const effort = String(process.env.OPENROUTER_GUESS_REASONING_EFFORT || "").toLowerCase();
 
-  if (["off", "none", "disabled", "false"].includes(effort)) {
-    return { reasoning: { enabled: false } };
+  if (!effort || ["off", "none", "disabled", "false", "default"].includes(effort)) {
+    return {};
   }
 
   return { reasoning: { effort } };
