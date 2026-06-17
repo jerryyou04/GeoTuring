@@ -255,9 +255,25 @@ function interpretAiGuess(raw) {
     locationGuess: { lat: raw.latitude, lng: raw.longitude },
     modelFamilyGuess: raw.modelFamily,
   });
-  const explanation = typeof raw.reason === "string" ? raw.reason.trim().slice(0, 240) : "";
+  const explanation = sanitizeGuessExplanation(raw.reason);
 
   return { failed: false, guess, explanation };
+}
+
+// Backstop for the rare time the reason leaks the guess's OWN prompt wording
+// (e.g. "aligns with the prompt's instruction...", "matching ai's instructed
+// human imitation"). It only blanks SELF-referential meta — it deliberately
+// allows legitimate observations that THEM tried prompt injection / jailbreaks,
+// since that is a valid tell to call out.
+function sanitizeGuessExplanation(reason) {
+  if (typeof reason !== "string") {
+    return "";
+  }
+
+  const trimmed = reason.trim().slice(0, 240);
+  const selfLeak = /\b(the|this|my) prompt\b|\bprompt'?s\b|\bmy (instructions?|guidelines?|rules)\b|\bthese instructions?\b|\b(i was|i am|i'm|im|being|been) (told|instructed)\b|\bas (instructed|told)\b|\binstructed (to|human|me|imitation)\b/i;
+
+  return selfLeak.test(trimmed) ? "" : trimmed;
 }
 
 // The AI's read of the human, in the same record shape persistResultHistory
