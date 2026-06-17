@@ -12,7 +12,7 @@ const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 120);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4",
-  Gemini: "google/gemini-3.1-pro",
+  Gemini: "google/gemini-3.1-pro-preview",
   Claude: "anthropic/claude-sonnet-4.6",
   Grok: "x-ai/grok-4.3",
 };
@@ -47,7 +47,7 @@ function createOpenRouterAiProvider(modelFamily, persona) {
             model,
             messages: buildOpenRouterMessages(messages, persona),
             max_tokens: OPENROUTER_MAX_TOKENS,
-            ...(modelFamily === "Gemini" ? { reasoning: { effort: "minimal" } } : {}),
+            reasoning: { effort: "low" },
             temperature: 0.86,
             top_p: 0.92,
             frequency_penalty: 0.35,
