@@ -10,6 +10,30 @@ module.exports = {
   ADMIN_TOKEN_TTL_MS: 12 * 60 * 60 * 1000,
   AI_FALLBACK_SECONDS: 20,
   AI_SEND_DEADLINE_BUFFER_MS: 750,
+  // The AI can proactively "click guess" to end the chat, like a human can.
+  // Probability is evaluated once per AI turn, but only once the round is
+  // guess-ready (>= MIN_MESSAGES_PER_SIDE each), so the AI can never trigger
+  // the early-abort path.
+  AI_LOCK_BASE_PROB: 0.1, // baseline chance on the first eligible turn
+  AI_LOCK_PROB_GROWTH: 0.09, // added per subsequent eligible AI turn
+  AI_LOCK_PROB_MAX: 0.72, // ceiling on the per-turn chance
+  AI_LOCK_TIME_LEFT_BUMP: 0.2, // extra chance when little chat time remains
+  AI_LOCK_TIME_LEFT_BUMP_MS: 22000, // "little time remaining" threshold
+  AI_LOCK_HOSTILE_PROB: 0.55, // chance to lock on a hostile message vs. keep fighting (#4)
+  AI_LOCK_HOSTILE_SILENT_PROB: 0.4, // of those locks, share that skip the clapback and just guess
+  AI_LOCK_INSTEAD_PROB: 0.3, // of non-hostile locks, share that skip a reply (#3)
+  AI_LOCK_PARTING_PROB: 0.5, // chance an instead-of-reply lock posts a sign-off
+  // Lock delay has its own varied model. It spans into the human's turn, so it
+  // is deliberately NOT bounded by the AI's turn budget. Kept under TURN_MS so
+  // an idle human's turn-timeout can't fire the auto-abort before the lock.
+  AI_LOCK_DELAY_AFTER_REPLY_MS: 2200, // beat after the final message (#2)
+  AI_LOCK_DELAY_AFTER_REPLY_STDDEV_MS: 900,
+  AI_LOCK_DELAY_HOSTILE_MS: 1100, // snappier angry lock (#4)
+  AI_LOCK_DELAY_HOSTILE_STDDEV_MS: 450,
+  AI_LOCK_DELAY_INSTEAD_MS: 3500, // "thinking... nah, i'll just guess" (#3)
+  AI_LOCK_DELAY_INSTEAD_STDDEV_MS: 1400,
+  AI_LOCK_DELAY_MIN_MS: 500,
+  AI_LOCK_DELAY_MAX_MS: 9000,
   AI_TYPING_MAX_RATIO: 0.82,
   AI_TYPING_MIN_RATIO: 0.05,
   AI_TYPING_WPM: Number(process.env.AI_TYPING_WPM) || 60,

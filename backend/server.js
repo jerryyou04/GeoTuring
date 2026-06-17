@@ -6,6 +6,9 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { MODEL_FAMILIES, createAiProvider } = require("./aiAdapters");
 const {
+  AI_SEND_DEADLINE_BUFFER_MS,
+  AI_LOCK_DELAY_MIN_MS,
+  AI_LOCK_DELAY_MAX_MS,
   CHAT_SECONDS,
   FINAL_GUESS_MS,
   FRONTEND_URL,
@@ -16,6 +19,7 @@ const {
   TURN_MS,
 } = require("./config");
 const {
+  clamp,
   cryptoRandomId,
   pick,
   sleep,
@@ -44,7 +48,9 @@ const { createQueueService } = require("./queue");
 const db = require("./db");
 const {
   createAiResponseStatus,
+  decideAiLock,
   getAiSendDelay,
+  isMessageHostile,
   markAiResponseStatus,
   normalizeAiReplyResult,
 } = require("./aiRuntime");
@@ -206,6 +212,9 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     finalGuessEndsAt: null,
     finalGuessTimer: null,
     aiResponseStatus: createAiResponseStatus("idle"),
+    aiLockPending: false,
+    aiLockTimer: null,
+    aiLockEligibleTurns: 0,
     timeout: null,
     expireTimer: null,
   };
@@ -303,6 +312,14 @@ function handleChatMessage(socket, payload = {}) {
     return;
   }
 
+  // The AI already committed to locking after its last message. Keep this human
+  // message in the log, but don't start another AI turn — the pending lock will
+  // close the chat. This is the "send a message then guess before they reply"
+  // case from the AI's side (#4).
+  if (session.aiLockPending) {
+    return;
+  }
+
   startTurn(session, "partner");
 }
 
@@ -395,13 +412,107 @@ function handleRoundLock(socket, payload = {}) {
     return;
   }
 
+  lockChat(session, { by: socket.id });
+}
+
+// Single transition for ending the chat and opening the final-guess window,
+// shared by the human guess button, the timeout paths, and the AI's own lock.
+function lockChat(session, { by = null, message } = {}) {
   session.chatLocked = true;
   clearTurnTimer(session);
+  clearAiLockTimer(session);
+  session.aiLockPending = false;
   session.turnOwner = null;
   session.turnEndsAt = null;
   session.timeout = null;
   startFinalGuessTimer(session);
-  emitRoundLocked(session, socket.id);
+  emitRoundLocked(session, by, message);
+}
+
+function clearAiLockTimer(session) {
+  if (session.aiLockTimer) {
+    clearTimeout(session.aiLockTimer);
+    session.aiLockTimer = null;
+  }
+}
+
+// Commit the AI to ending the chat after a varied delay. Once a lock is pending
+// no new AI turn is started (see handleChatMessage), so a fast human reply during
+// the window can't spawn a second, half-finished AI response.
+function scheduleAiLock(session, plan) {
+  if (session.aiLockPending || session.chatLocked || session.ended) {
+    return;
+  }
+
+  session.aiLockPending = true;
+  const delay = clamp(plan.delayMs || 0, AI_LOCK_DELAY_MIN_MS, AI_LOCK_DELAY_MAX_MS);
+  session.aiLockTimer = setTimeout(() => fireAiLock(session.id), delay);
+}
+
+function fireAiLock(sessionId) {
+  const session = sessions.get(sessionId);
+
+  if (!session) {
+    return;
+  }
+
+  session.aiLockTimer = null;
+  session.aiLockPending = false;
+
+  if (session.ended || session.chatLocked) {
+    return;
+  }
+
+  if (Date.now() >= session.chatEndsAt) {
+    handleChatExpired(sessionId);
+    return;
+  }
+
+  // Safety net: never lock a round that isn't guess-ready, so the AI can never
+  // trip the early-abort path.
+  if (!isGuessReady(session)) {
+    return;
+  }
+
+  lockChat(session, { message: "Your partner locked the chat. Make your final read." });
+}
+
+function lastHumanMessageHostile(session) {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+
+    if (message.author === session.playerSocketId) {
+      return isMessageHostile(message.text);
+    }
+  }
+
+  return false;
+}
+
+function emitAiPartnerMessage(session, text) {
+  const sentAt = Date.now();
+
+  session.messages.push({
+    author: "partner",
+    text,
+    sentAt,
+    ai: {
+      source: "local",
+      failed: false,
+      error: null,
+      model: "lock-signoff",
+    },
+  });
+
+  io.to(session.playerSocketId).emit("partner:message", {
+    sessionId: session.id,
+    message: {
+      id: cryptoRandomId(),
+      author: "partner",
+      text,
+      sentAt,
+    },
+  });
 }
 
 function findSessionByPlayerId(playerId, preferredSessionId = "") {
@@ -568,6 +679,29 @@ async function sendAiTurnMessage(sessionId) {
     return;
   }
 
+  // Decide once per turn whether the AI ends the chat early, and how. Evaluated
+  // only when the round is already guess-ready, so the AI can never trip the
+  // early-abort path (#1).
+  let lockPlan = { lock: false };
+
+  if (isGuessReady(session) && Date.now() < session.chatEndsAt - AI_SEND_DEADLINE_BUFFER_MS) {
+    session.aiLockEligibleTurns += 1;
+    lockPlan = decideAiLock({
+      turnsSinceEligible: session.aiLockEligibleTurns,
+      hostile: lastHumanMessageHostile(session),
+      msLeftInChat: session.chatEndsAt - Date.now(),
+    });
+  }
+
+  // Bored / done talking: skip the reply, maybe drop a short sign-off, then lock (#3).
+  if (lockPlan.lock && lockPlan.mode === "instead-of-reply") {
+    if (lockPlan.parting) {
+      emitAiPartnerMessage(session, lockPlan.parting);
+    }
+    scheduleAiLock(session, lockPlan);
+    return;
+  }
+
   const turnStartedAt = Date.now();
   markAiResponseStatus(session, {
     state: "generating",
@@ -668,6 +802,12 @@ async function sendAiTurnMessage(sessionId) {
     message,
   });
   startTurn(session, session.playerSocketId);
+
+  // Had enough info, or a parting shot before a drive-by lock: send this message,
+  // then commit to ending the chat after a varied beat (#2, #4).
+  if (lockPlan.lock && lockPlan.mode === "after-reply") {
+    scheduleAiLock(session, lockPlan);
+  }
 }
 
 function handleTurnTimeout(sessionId, owner) {
@@ -686,12 +826,7 @@ function handleTurnTimeout(sessionId, owner) {
     return;
   }
 
-  session.chatLocked = true;
-  session.turnOwner = null;
-  session.turnEndsAt = null;
-  session.timeout = null;
-  startFinalGuessTimer(session);
-  emitRoundLocked(session, null, "The turn timer expired, so the chat is locked. Make your final read.");
+  lockChat(session, { message: "The turn timer expired, so the chat is locked. Make your final read." });
 }
 
 function scheduleChatEnd(session) {
@@ -718,12 +853,7 @@ function handleChatExpired(sessionId) {
     return;
   }
 
-  session.chatLocked = true;
-  session.turnOwner = null;
-  session.turnEndsAt = null;
-  session.timeout = null;
-  startFinalGuessTimer(session);
-  emitRoundLocked(session, null, "Time ran out, so the chat is locked. Make your final read.");
+  lockChat(session, { message: "Time ran out, so the chat is locked. Make your final read." });
 }
 
 function clearTurnTimer(session) {
@@ -975,6 +1105,7 @@ function deleteSession(sessionId) {
   }
   clearTurnTimer(session);
   clearFinalGuessTimer(session);
+  clearAiLockTimer(session);
 
   if (session.mode === "human") {
     Object.keys(session.players).forEach((socketId) => socketSessions.delete(socketId));
