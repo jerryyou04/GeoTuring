@@ -11,10 +11,10 @@ const OPENROUTER_MAX_CONTEXT_MESSAGES = Number(process.env.OPENROUTER_MAX_CONTEX
 const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 120);
 
 const DEFAULT_OPENROUTER_MODELS = {
-  ChatGPT: "openai/gpt-4o",
-  Gemini: "google/gemini-3.5-flash",
+  ChatGPT: "openai/gpt-5.4",
+  Gemini: "google/gemini-3.1-pro",
   Claude: "anthropic/claude-sonnet-4.6",
-  Grok: "x-ai/grok-4.20",
+  Grok: "x-ai/grok-4.3",
 };
 
 const STYLE_RULES = [
@@ -167,7 +167,7 @@ function normalizeAiReply(value) {
     .trim()
     .slice(0, 320);
 
-  if (cleaned.length < 3 || !/[a-z0-9]/i.test(cleaned)) {
+  if (!cleaned) {
     return "";
   }
 
