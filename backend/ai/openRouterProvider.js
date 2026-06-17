@@ -12,7 +12,7 @@ const OPENROUTER_MAX_TOKENS = Number(process.env.OPENROUTER_MAX_TOKENS || 120);
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4",
-  Gemini: "google/gemini-3.1-pro-preview",
+  Gemini: "google/gemini-3.5-flash",
   Claude: "anthropic/claude-sonnet-4.6",
   Grok: "x-ai/grok-4.3",
 };
@@ -47,7 +47,7 @@ function createOpenRouterAiProvider(modelFamily, persona) {
             model,
             messages: buildOpenRouterMessages(messages, persona),
             max_tokens: OPENROUTER_MAX_TOKENS,
-            reasoning: { effort: "low" },
+            ...buildReasoningConfig(),
             temperature: 0.86,
             top_p: 0.92,
             frequency_penalty: 0.35,
@@ -181,6 +181,18 @@ function normalizeAiReply(value) {
 function getModelSlug(modelFamily) {
   const envKey = `OPENROUTER_MODEL_${modelFamily.toUpperCase()}`;
   return process.env[envKey] || DEFAULT_OPENROUTER_MODELS[modelFamily] || DEFAULT_OPENROUTER_MODELS.ChatGPT;
+}
+
+// OPENROUTER_REASONING_EFFORT: "minimal" | "low" | "medium" | "high", or
+// "off" to disable thinking entirely (best for snappy casual chat). Defaults to "low".
+function buildReasoningConfig() {
+  const effort = String(process.env.OPENROUTER_REASONING_EFFORT || "low").toLowerCase();
+
+  if (["off", "none", "disabled", "false"].includes(effort)) {
+    return { reasoning: { enabled: false } };
+  }
+
+  return { reasoning: { effort } };
 }
 
 function containsForbiddenReply(reply) {
