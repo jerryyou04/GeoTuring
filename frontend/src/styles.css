@@ -1893,6 +1893,36 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.historySummary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.historySummaryItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.historySummaryLabel {
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.historySummaryValue {
+  color: var(--text);
+  font-size: 0.88rem;
+  text-align: right;
+}
+
 /* Chat bubbles, shared by player history and the admin history panel */
 .chatTranscript {
   display: grid;

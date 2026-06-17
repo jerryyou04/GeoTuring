@@ -137,6 +137,7 @@ function HistoryRow({ game }: { game: GameHistoryEntry }) {
       </button>
       {expanded && (
         <div className="historyChat">
+          <GuessSummary game={game} />
           <p className="historyChatMeta">
             {messageCount > 0 ? `${messageCount} message${messageCount === 1 ? "" : "s"}` : "Transcript"}
           </p>
@@ -152,13 +153,88 @@ function HistoryRow({ game }: { game: GameHistoryEntry }) {
 
 function formatDetail(game: GameHistoryEntry) {
   if (game.opponentType === "AI") {
-    return game.modelFamily ? `Model: ${game.modelFamily}` : "AI opponent";
+    if (!game.modelFamily) {
+      return "AI opponent";
+    }
+
+    if (!game.modelFamilyGuess) {
+      return `Was ${game.modelFamily}`;
+    }
+
+    return game.modelFamilyGuess === game.modelFamily
+      ? `${game.modelFamily} ✓`
+      : `Guessed ${game.modelFamilyGuess} · was ${game.modelFamily}`;
   }
 
   const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ");
   const distance = game.distanceKm === null ? null : `${game.distanceKm.toLocaleString()} km off`;
 
   return [place, distance].filter(Boolean).join(" · ") || "Human opponent";
+}
+
+// Expanded summary: how this player's second guess landed, and (for human
+// games) how the opponent read them back.
+function GuessSummary({ game }: { game: GameHistoryEntry }) {
+  const isHuman = game.opponentType === "Human";
+  const yourGuess = describeYourSecondGuess(game);
+  const theirRead = isHuman ? describeOpponentRead(game) : null;
+
+  return (
+    <div className="historySummary">
+      <div className="historySummaryItem">
+        <span className="historySummaryLabel">Your second guess</span>
+        <span className="historySummaryValue">{yourGuess}</span>
+      </div>
+      {isHuman && (
+        <div className="historySummaryItem">
+          <span className="historySummaryLabel">How they read you</span>
+          <span className="historySummaryValue">{theirRead}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function describeYourSecondGuess(game: GameHistoryEntry) {
+  if (game.opponentType === "AI") {
+    if (!game.modelFamilyGuess) {
+      return `You didn't call it AI — it was ${game.modelFamily || "an AI"}.`;
+    }
+
+    return game.modelFamilyGuess === game.modelFamily
+      ? `Named ${game.modelFamilyGuess} — correct ✓`
+      : `Guessed ${game.modelFamilyGuess}, it was ${game.modelFamily} ✗`;
+  }
+
+  const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ") || "their location";
+
+  if (game.distanceKm === null) {
+    return `No location pin placed — they were in ${place}.`;
+  }
+
+  return `Pinned ${game.distanceKm.toLocaleString()} km from ${place}.`;
+}
+
+function describeOpponentRead(game: GameHistoryEntry) {
+  if (!game.opponentIdentityGuess) {
+    return "They didn't lock in a guess.";
+  }
+
+  const identity = game.opponentCorrectIdentity
+    ? "Read you as Human ✓"
+    : `Thought you were ${game.opponentIdentityGuess} ✗`;
+
+  if (game.opponentIdentityGuess === "Human") {
+    const distance = game.opponentDistanceKm === null
+      ? "no location pin"
+      : `${game.opponentDistanceKm.toLocaleString()} km off`;
+
+    return `${identity} · ${distance}`;
+  }
+
+  return game.opponentModelFamilyGuess
+    ? `${identity} · guessed ${game.opponentModelFamilyGuess}`
+    : identity;
 }
 
 function formatScore(value: number) {

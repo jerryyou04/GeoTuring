@@ -26,9 +26,9 @@ export function Landing({
         <p className="roundLabel">Real-time deduction game</p>
         <h2>Chat anonymously with a stranger or a machine.</h2>
         <p>
-          Ask a few questions, decide whether your partner is human or AI, then
-          make the second guess: place their location on the world map or call
-          the model family.
+          Ask a few questions, then decide: human or AI? If they're human, pin
+          where they live on the map. If it's AI, name the model — ChatGPT,
+          Claude, Gemini, or Grok.
         </p>
         <button className="primaryButton" disabled={!canUsePrimaryAction} onClick={onStart}>
           {locationStatus === "checking" ? "Checking location" : hasLocation ? "Start matchmaking" : "Check location"}

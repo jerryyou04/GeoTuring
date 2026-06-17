@@ -21,6 +21,7 @@ const {
 const {
   clamp,
   cryptoRandomId,
+  haversineKm,
   pick,
   sleep,
 } = require("./utils");
@@ -100,7 +101,7 @@ app.get("/api/history", async (req, res) => {
   }
 });
 
-function persistResultHistory(playerId, result, transcript = []) {
+function persistResultHistory(playerId, result, transcript = [], opponent = null) {
   if (!playerId || !result || !db.isDbEnabled()) {
     return;
   }
@@ -119,8 +120,13 @@ function persistResultHistory(playerId, result, transcript = []) {
       roundPossible: result.score?.round?.possible ?? 0,
       distanceKm: result.distanceKm ?? null,
       modelFamily: result.actual?.modelFamily || null,
+      modelFamilyGuess: result.guess?.modelFamilyGuess || null,
       actualRegion: result.actual?.region || null,
       actualCountry: result.actual?.country || null,
+      opponentIdentityGuess: opponent?.identityGuess ?? null,
+      opponentCorrectIdentity: opponent?.correctIdentity ?? null,
+      opponentDistanceKm: opponent?.distanceKm ?? null,
+      opponentModelFamilyGuess: opponent?.modelFamilyGuess ?? null,
       transcript,
     })
     .catch((error) => console.error("Failed to save game history:", error.message));
@@ -130,6 +136,72 @@ function persistResultHistory(playerId, result, transcript = []) {
 // ("player" / "partner"), so their history and the admin view read naturally.
 function buildStoredTranscript(session, socketId) {
   return serializeMessagesForSocket(session, socketId);
+}
+
+// How the human opponent read THIS player: their identity call, whether it was
+// right (this player is human), and either how far their location pin landed or
+// which model they mistook the player for. Null unless both sides have guessed.
+function buildOpponentGuessRecord(session, socketId) {
+  if (session.mode !== "human") {
+    return null;
+  }
+
+  const partnerSocketId = getHumanPartnerSocketId(session, socketId);
+  const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+  const me = session.players[socketId];
+
+  if (!partner || !partner.submitted || !partner.guess || !me) {
+    return null;
+  }
+
+  const guess = partner.guess;
+  const identityGuess = guess.identityGuess === "Human" || guess.identityGuess === "AI" ? guess.identityGuess : null;
+  const correctIdentity = identityGuess === "Human";
+  let distanceKm = null;
+
+  if (
+    identityGuess === "Human" &&
+    Number.isFinite(guess.locationGuess?.lat) &&
+    Number.isFinite(guess.locationGuess?.lng) &&
+    Number.isFinite(me.location?.lat) &&
+    Number.isFinite(me.location?.lng)
+  ) {
+    distanceKm = Math.round(
+      haversineKm(guess.locationGuess.lat, guess.locationGuess.lng, me.location.lat, me.location.lng),
+    );
+  }
+
+  return {
+    identityGuess,
+    correctIdentity,
+    distanceKm,
+    modelFamilyGuess: identityGuess === "AI" ? guess.modelFamilyGuess || null : null,
+  };
+}
+
+// Persist both human players' rows once when the game is fully settled, so each
+// row can carry the other side's guess. Guarded against double-writes.
+function persistHumanGameHistory(session) {
+  if (session.mode !== "human" || session.historyPersisted) {
+    return;
+  }
+
+  session.historyPersisted = true;
+
+  Object.keys(session.players).forEach((socketId) => {
+    const player = session.players[socketId];
+
+    if (!player.result) {
+      return;
+    }
+
+    persistResultHistory(
+      player.playerId,
+      player.result,
+      buildStoredTranscript(session, socketId),
+      buildOpponentGuessRecord(session, socketId),
+    );
+  });
 }
 
 const sessions = new Map();
@@ -165,6 +237,7 @@ function createHumanSession(first, second) {
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
+    historyPersisted: false,
     timeout: null,
     expireTimer: null,
   };
@@ -380,6 +453,7 @@ function handleGuessSubmit(socket, payload = {}) {
 
     if (areHumanFinalGuessesDone(session)) {
       clearFinalGuessTimer(session);
+      persistHumanGameHistory(session);
       deleteSession(session.id);
     }
 
@@ -937,6 +1011,7 @@ function finalizeMissingGuesses(sessionId) {
     alreadyDone.forEach((socketId) => emitOpponentGuessFill(session, socketId));
 
     clearFinalGuessTimer(session);
+    persistHumanGameHistory(session);
     deleteSession(session.id);
     return;
   }
@@ -969,8 +1044,6 @@ function emitHumanPlayerResult(session, socketId) {
     opponentPending: !opponentReady,
     opponentGuessEndsAt: session.finalGuessEndsAt || null,
   });
-
-  persistResultHistory(player.playerId, player.result, buildStoredTranscript(session, socketId));
 }
 
 function emitOpponentGuessFill(session, socketId) {

@@ -141,8 +141,13 @@ export interface GameHistoryEntry {
   roundPossible: number;
   distanceKm: number | null;
   modelFamily: ModelFamily | null;
+  modelFamilyGuess: ModelFamily | null;
   actualRegion: string | null;
   actualCountry: string | null;
+  opponentIdentityGuess: IdentityGuess | null;
+  opponentCorrectIdentity: boolean | null;
+  opponentDistanceKm: number | null;
+  opponentModelFamilyGuess: ModelFamily | null;
   messageCount?: number;
   transcript?: StoredTranscriptMessage[];
 }

@@ -67,6 +67,14 @@ async function initDb() {
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS transcript JSONB`);
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS message_count INTEGER NOT NULL DEFAULT 0`);
 
+  // What this player guessed for the AI's model (the actual one lives in
+  // model_family), plus how their human opponent read them back.
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS model_family_guess TEXT`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_identity_guess TEXT`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_correct_identity BOOLEAN`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_distance_km INTEGER`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_model_family_guess TEXT`);
+
   // Supports the admin's newest-first paginated sweep across every player.
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_game_history_played_at
@@ -87,9 +95,10 @@ async function saveGameHistory(record) {
     `INSERT INTO game_history (
        player_id, session_id, opponent_type, identity_guess, correct_identity,
        read_earned, read_possible, round_type, round_earned, round_possible,
-       distance_km, model_family, actual_region, actual_country,
-       transcript, message_count
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       distance_km, model_family, model_family_guess, actual_region, actual_country,
+       opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
+       opponent_model_family_guess, transcript, message_count
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      ON CONFLICT (player_id, session_id) DO NOTHING`,
     [
       record.playerId,
@@ -104,13 +113,26 @@ async function saveGameHistory(record) {
       record.roundPossible,
       record.distanceKm,
       record.modelFamily,
+      record.modelFamilyGuess ?? null,
       record.actualRegion,
       record.actualCountry,
+      record.opponentIdentityGuess ?? null,
+      record.opponentCorrectIdentity ?? null,
+      record.opponentDistanceKm ?? null,
+      record.opponentModelFamilyGuess ?? null,
       JSON.stringify(transcript),
       transcript.length,
     ],
   );
 }
+
+// Columns selected for both the player and admin history views. Kept in one
+// place so the two queries and mapHistoryRow can't drift apart.
+const HISTORY_COLUMNS = `player_id, session_id, played_at, opponent_type, identity_guess, correct_identity,
+            read_earned, read_possible, round_type, round_earned, round_possible,
+            distance_km, model_family, model_family_guess, actual_region, actual_country,
+            opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
+            opponent_model_family_guess, transcript, message_count`;
 
 // Shared row -> entry mapping so the player and admin views stay in sync.
 function mapHistoryRow(row, { includePlayerId = false } = {}) {
@@ -127,8 +149,13 @@ function mapHistoryRow(row, { includePlayerId = false } = {}) {
     roundPossible: Number(row.round_possible),
     distanceKm: row.distance_km === null ? null : Number(row.distance_km),
     modelFamily: row.model_family,
+    modelFamilyGuess: row.model_family_guess,
     actualRegion: row.actual_region,
     actualCountry: row.actual_country,
+    opponentIdentityGuess: row.opponent_identity_guess,
+    opponentCorrectIdentity: row.opponent_correct_identity,
+    opponentDistanceKm: row.opponent_distance_km === null ? null : Number(row.opponent_distance_km),
+    opponentModelFamilyGuess: row.opponent_model_family_guess,
     messageCount: row.message_count === null ? 0 : Number(row.message_count),
     transcript: Array.isArray(row.transcript) ? row.transcript : [],
   };
@@ -146,10 +173,7 @@ async function getPlayerHistory(playerId, limit = 100) {
   }
 
   const result = await pool.query(
-    `SELECT session_id, played_at, opponent_type, identity_guess, correct_identity,
-            read_earned, read_possible, round_type, round_earned, round_possible,
-            distance_km, model_family, actual_region, actual_country,
-            transcript, message_count
+    `SELECT ${HISTORY_COLUMNS}
        FROM game_history
       WHERE player_id = $1
       ORDER BY played_at DESC
@@ -179,10 +203,7 @@ async function getAllHistory({ limit = 25, offset = 0, playerId = "" } = {}) {
   );
 
   const rowsResult = await pool.query(
-    `SELECT player_id, session_id, played_at, opponent_type, identity_guess, correct_identity,
-            read_earned, read_possible, round_type, round_earned, round_possible,
-            distance_km, model_family, actual_region, actual_country,
-            transcript, message_count
+    `SELECT ${HISTORY_COLUMNS}
        FROM game_history
        ${where}
       ORDER BY played_at DESC
