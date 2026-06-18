@@ -442,7 +442,6 @@ function GameApp() {
     queueStartedAtRef.current = queuedAt;
     queueFoundAtRef.current = null;
     setQueueFrozenSeconds(null);
-    setEstimatedQueueSeconds(8);
     setNow(queuedAt);
 
     socketRef.current?.disconnect();
@@ -746,7 +745,6 @@ function GameApp() {
     queueStartedAtRef.current = null;
     queueFoundAtRef.current = null;
     setQueueFrozenSeconds(null);
-    setEstimatedQueueSeconds(8);
   }
 
   function getQueueTransitionDelay() {
