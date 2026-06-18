@@ -41,10 +41,17 @@ function sanitizeLocation(value = {}) {
     country: sanitizeText(location.country, "Unknown"),
     region: sanitizeText(location.region, ""),
     city: sanitizeText(location.city, ""),
-    lat: toFiniteRangeNumber(location.lat, -90, 90),
-    lng: toFiniteRangeNumber(location.lng, -180, 180),
+    // Round to ~city-level (1 decimal ≈ 11km grid) so we never store or reveal a
+    // neighborhood-precise coordinate. IP geolocation can resolve to within ~1km
+    // for some ISPs; this keeps the revealed pin a general area, not a block.
+    lat: roughenCoordinate(toFiniteRangeNumber(location.lat, -90, 90)),
+    lng: roughenCoordinate(toFiniteRangeNumber(location.lng, -180, 180)),
     source: "ip",
   };
+}
+
+function roughenCoordinate(value) {
+  return value === null ? null : Math.round(value * 10) / 10;
 }
 
 function sanitizePlayerId(value) {

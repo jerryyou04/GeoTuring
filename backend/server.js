@@ -20,7 +20,6 @@ const {
   GUESS_GRACE_SECONDS,
   MIN_MESSAGES_PER_SIDE,
   PORT,
-  QUEUE_ESTIMATED_SECONDS,
   TURN_MS,
 } = require("./config");
 const {
@@ -497,7 +496,6 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     requiredProfiles: 2,
     status: "found",
     queuedAt,
-    estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
   });
 
   socket.emit("session:created", {
@@ -761,6 +759,33 @@ function lastHumanMessageHostile(session) {
   return false;
 }
 
+// Send a parting sign-off with a realistic typing delay (so it isn't instant).
+// Re-validates after the delay; if the turn/chat ended meanwhile, drops it and
+// lets the lock proceed.
+async function typeAndEmitSignoff(session, text) {
+  const turnStartedAt = Date.now();
+  markAiResponseStatus(session, {
+    state: "typing",
+    responseText: text,
+    source: "local",
+    failed: false,
+    error: null,
+    model: "lock-signoff",
+  });
+
+  const { delayMs } = getAiSendDelay({ replyText: text, turnStartedAt, turnEndsAt: session.turnEndsAt });
+
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
+
+  if (!sessions.has(session.id) || session.ended || session.chatLocked || session.turnOwner !== "partner") {
+    return;
+  }
+
+  emitAiPartnerMessage(session, text);
+}
+
 function emitAiPartnerMessage(session, text) {
   const sentAt = Date.now();
 
@@ -977,7 +1002,7 @@ async function sendAiTurnMessage(sessionId) {
   // Bored / done talking: skip the reply, maybe drop a short sign-off, then lock (#3).
   if (lockPlan.lock && lockPlan.mode === "instead-of-reply") {
     if (lockPlan.parting) {
-      emitAiPartnerMessage(session, lockPlan.parting);
+      await typeAndEmitSignoff(session, lockPlan.parting);
     }
     scheduleAiLock(session, lockPlan);
     return;

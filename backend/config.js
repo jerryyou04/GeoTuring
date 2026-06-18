@@ -8,7 +8,10 @@ module.exports = {
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "",
   ADMIN_API_PATH: "/admin/host-monitor",
   ADMIN_TOKEN_TTL_MS: 12 * 60 * 60 * 1000,
-  AI_FALLBACK_SECONDS: 20,
+  // The AI "connects" after a random wait in this range, so a match feels real
+  // and variable instead of a fixed beat.
+  AI_CONNECT_MIN_MS: 2000,
+  AI_CONNECT_MAX_MS: 40000,
   AI_SEND_DEADLINE_BUFFER_MS: 750,
   // After the chat, the AI makes its own guess about whether the human was human
   // or AI (+ location/model + a reason). Set to "false" to disable.
@@ -25,7 +28,7 @@ module.exports = {
   AI_LOCK_HOSTILE_PROB: 0.55, // chance to lock on a hostile message vs. keep fighting (#4)
   AI_LOCK_HOSTILE_SILENT_PROB: 0.4, // of those locks, share that skip the clapback and just guess
   AI_LOCK_INSTEAD_PROB: 0.3, // of non-hostile locks, share that skip a reply (#3)
-  AI_LOCK_PARTING_PROB: 0.5, // chance an instead-of-reply lock posts a sign-off
+  AI_LOCK_PARTING_PROB: 0.2, // chance an instead-of-reply lock posts a short sign-off (rare)
   // Lock delay has its own varied model. It spans into the human's turn, so it
   // is deliberately NOT bounded by the AI's turn budget. Kept under TURN_MS so
   // an idle human's turn-timeout can't fire the auto-abort before the lock.
@@ -58,7 +61,6 @@ module.exports = {
   FINAL_GUESS_MS: FINAL_GUESS_SECONDS * 1000,
   GUESS_GRACE_SECONDS: 300,
   MIN_MESSAGES_PER_SIDE: 2,
-  QUEUE_ESTIMATED_SECONDS: 8,
   TURN_SECONDS,
   TURN_MS: TURN_SECONDS * 1000,
 };

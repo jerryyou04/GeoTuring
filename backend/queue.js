@@ -1,12 +1,13 @@
 const {
-  AI_FALLBACK_SECONDS,
-  QUEUE_ESTIMATED_SECONDS,
+  AI_CONNECT_MIN_MS,
+  AI_CONNECT_MAX_MS,
 } = require("./config");
 const {
   hasValidLocation,
   sanitizeLocation,
   sanitizePlayerId,
 } = require("./sanitizers");
+const { randomInt } = require("./utils");
 
 function createQueueService({
   waitingQueue,
@@ -68,7 +69,10 @@ function createQueueService({
 
         removeFromQueue(socket.id);
         createAiSession(socket, entry.location, null, entry.queuedAt);
-      }, AI_FALLBACK_SECONDS * 1000);
+        // Random per-player wait so the AI "connects" at a realistic, variable
+        // time rather than a fixed beat. A second human joining first still
+        // pre-empts this via pairWaitingPlayers (it clears the timer).
+      }, randomInt(AI_CONNECT_MIN_MS, AI_CONNECT_MAX_MS));
     }
   }
 
@@ -120,7 +124,6 @@ function createQueueService({
       requiredProfiles: 2,
       status: "searching",
       queuedAt: entry.queuedAt,
-      estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
     });
   }
 
@@ -131,7 +134,6 @@ function createQueueService({
         requiredProfiles: 2,
         status: "found",
         queuedAt: entry.queuedAt,
-        estimatedSeconds: QUEUE_ESTIMATED_SECONDS,
       });
     });
   }

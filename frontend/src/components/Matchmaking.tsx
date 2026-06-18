@@ -5,13 +5,11 @@ import { formatSeconds } from "../utils";
 export function Matchmaking({
   actualSeconds,
   connectedProfiles,
-  estimatedSeconds,
   requiredProfiles,
   status,
 }: {
   actualSeconds: number;
   connectedProfiles: number;
-  estimatedSeconds: number;
   requiredProfiles: number;
   status: QueueStatus;
 }) {
@@ -42,12 +40,8 @@ export function Matchmaking({
 
         <div className="queueTimes">
           <div>
-            <span>Actual Queue Time</span>
+            <span>Queue Time</span>
             <strong>{formatSeconds(actualSeconds)}</strong>
-          </div>
-          <div>
-            <span>Estimated Queue Time</span>
-            <strong>{formatSeconds(estimatedSeconds)}</strong>
           </div>
         </div>
       </div>

@@ -29,7 +29,6 @@ export interface QueueStatusPayload {
   requiredProfiles: number;
   status: QueueStatus;
   queuedAt: number;
-  estimatedSeconds: number;
 }
 
 export interface QueueErrorPayload {

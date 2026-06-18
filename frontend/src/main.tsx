@@ -107,7 +107,6 @@ function GameApp() {
   const [requiredProfiles, setRequiredProfiles] = useState(2);
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
   const [queueFrozenSeconds, setQueueFrozenSeconds] = useState<number | null>(null);
-  const [estimatedQueueSeconds, setEstimatedQueueSeconds] = useState(8);
   const [persistentScore, setPersistentScore] = useState<PersistentScore>(() => loadPersistentScore());
   const [locationConsent, setLocationConsent] = useState(() => loadLocationConsent());
   const [ipLocation, setIpLocation] = useState<IpLocation | null>(() => loadIpLocation());
@@ -228,7 +227,6 @@ function GameApp() {
     setRequiredProfiles(payload.requiredProfiles);
     setQueueStartedAt(queuedAt);
     queueStartedAtRef.current = queuedAt;
-    setEstimatedQueueSeconds(payload.estimatedSeconds);
 
     if (payload.status === "found") {
       markQueueFound(queuedAt);
@@ -928,7 +926,6 @@ function GameApp() {
         <Matchmaking
           actualSeconds={actualQueueSeconds}
           connectedProfiles={connectedProfiles}
-          estimatedSeconds={estimatedQueueSeconds}
           requiredProfiles={requiredProfiles}
           status={queueStatus}
         />

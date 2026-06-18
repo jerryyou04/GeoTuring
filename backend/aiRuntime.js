@@ -147,13 +147,25 @@ const HOSTILE_TRIGGERS = [
   "kill", "creep", "young girl", "retard", "dumbass", "threat", "dox",
 ];
 
+// Natural, casual sign-offs a real person sends before bailing — deliberately
+// NOT meta about the game/guessing. Kept varied to avoid obvious repetition.
 const LOCK_SIGNOFF_LINES = [
-  "ok i've got a read, calling it",
-  "alright i'm gonna guess",
-  "yeah i'm good, locking it in",
-  "ok that's enough for me",
-  "i'll just guess from here",
-  "cool, i'm ready to guess",
+  "gtg",
+  "aight im out",
+  "imma head out",
+  "anyway this was fun",
+  "k im out lol",
+  "later",
+  "ok i gotta run",
+  "aight ttyl",
+  "alright im gonna bounce",
+  "ok im heading off",
+  "gotta go, was nice talking",
+  "aight peace",
+  "k bye lol",
+  "im out, take care",
+  "alright catch you later",
+  "welp im off",
 ];
 
 function isMessageHostile(text) {
