@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { API_URL } from "../config";
 import { loadName, loadOrCreatePlayerId, saveName } from "../storage";
 import type { LeaderboardEntry } from "../types";
+import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
 
@@ -80,11 +81,11 @@ export function Leaderboard() {
             New game
           </a>
           <a className="navItem" href="/history">
-            <span className="navIcon ghost" aria-hidden="true">↺</span>
+            <span className="navIcon ghost"><HistoryIcon /></span>
             History
           </a>
           <a className="navItem active" href="/leaderboard">
-            <span className="navIcon ghost" aria-hidden="true">★</span>
+            <span className="navIcon ghost"><LeaderboardIcon /></span>
             Leaderboard
           </a>
         </nav>

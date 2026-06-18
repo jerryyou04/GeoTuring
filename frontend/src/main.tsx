@@ -64,6 +64,7 @@ import {
 } from "./components/GuessScreens";
 import { Landing } from "./components/Landing";
 import { Matchmaking } from "./components/Matchmaking";
+import { HistoryIcon, LeaderboardIcon } from "./components/NavIcons";
 import { Reveal } from "./components/Reveal";
 import { StatusPill } from "./components/StatusPill";
 
@@ -899,8 +900,12 @@ function GameApp() {
             New game
           </button>
           <a className="navItem" href="/history">
-            <span className="navIcon ghost" aria-hidden="true">↺</span>
+            <span className="navIcon ghost"><HistoryIcon /></span>
             History
+          </a>
+          <a className="navItem" href="/leaderboard">
+            <span className="navIcon ghost"><LeaderboardIcon /></span>
+            Leaderboard
           </a>
         </nav>
         <div className="sidebarFooter">

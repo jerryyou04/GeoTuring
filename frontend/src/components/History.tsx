@@ -4,6 +4,7 @@ import { loadOrCreatePlayerId } from "../storage";
 import type { GameHistoryEntry } from "../types";
 import { TranscriptView } from "./TranscriptView";
 import { GuessSummary, roundStatus } from "./HistoryDetail";
+import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
 
@@ -58,11 +59,11 @@ export function History() {
             New game
           </a>
           <a className="navItem active" href="/history">
-            <span className="navIcon ghost" aria-hidden="true">↺</span>
+            <span className="navIcon ghost"><HistoryIcon /></span>
             History
           </a>
           <a className="navItem" href="/leaderboard">
-            <span className="navIcon ghost" aria-hidden="true">★</span>
+            <span className="navIcon ghost"><LeaderboardIcon /></span>
             Leaderboard
           </a>
         </nav>
