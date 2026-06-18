@@ -10,6 +10,10 @@ const {
   AI_LOCK_DELAY_MIN_MS,
   AI_LOCK_DELAY_MAX_MS,
   AI_OPPONENT_GUESS_ENABLED,
+  AI_ENDGAME_MS,
+  AI_ENDGAME_LOCK_PROB,
+  AI_ENDGAME_QUIET_PROB,
+  AI_ENDGAME_MSG_BUFFER_MS,
   CHAT_SECONDS,
   FINAL_GUESS_MS,
   FRONTEND_URL,
@@ -951,14 +955,23 @@ async function sendAiTurnMessage(sessionId) {
   // only when the round is already guess-ready, so the AI can never trip the
   // early-abort path (#1).
   let lockPlan = { lock: false };
+  const eligibleToEnd = isGuessReady(session) && Date.now() < session.chatEndsAt - AI_SEND_DEADLINE_BUFFER_MS;
 
-  if (isGuessReady(session) && Date.now() < session.chatEndsAt - AI_SEND_DEADLINE_BUFFER_MS) {
+  if (eligibleToEnd) {
     session.aiLockEligibleTurns += 1;
     lockPlan = decideAiLock({
       turnsSinceEligible: session.aiLockEligibleTurns,
       hostile: lastHumanMessageHostile(session),
       msLeftInChat: session.chatEndsAt - Date.now(),
     });
+  }
+
+  // Distracted / too slow: go silent and let the 25s turn timer (armed in
+  // startTurn) run out, which auto-locks via handleTurnTimeout. Eligible-only, so
+  // it can only auto-lock, never abort. The "partner is typing" bubble shows the
+  // whole turn, so this reads as "they were typing and ran out of time".
+  if (lockPlan.lock && lockPlan.mode === "timeout") {
+    return;
   }
 
   // Bored / done talking: skip the reply, maybe drop a short sign-off, then lock (#3).
@@ -968,6 +981,26 @@ async function sendAiTurnMessage(sessionId) {
     }
     scheduleAiLock(session, lockPlan);
     return;
+  }
+
+  // Endgame: eligible, near the buzzer, and not already ending → act like a person
+  // short on time (pure chance, no LLM): click guess now, let the clock run out,
+  // or fire one quick last message.
+  let endgameQuickMessage = false;
+
+  if (eligibleToEnd && !lockPlan.lock && session.chatEndsAt - Date.now() < AI_ENDGAME_MS) {
+    const roll = Math.random();
+
+    if (roll < AI_ENDGAME_LOCK_PROB) {
+      scheduleAiLock(session, { delayMs: AI_LOCK_DELAY_MIN_MS }); // realize time's short, click guess
+      return;
+    }
+
+    if (roll < AI_ENDGAME_LOCK_PROB + AI_ENDGAME_QUIET_PROB) {
+      return; // go silent, let the chat clock run out → handleChatExpired locks
+    }
+
+    endgameQuickMessage = true; // fall through and fire one quick final message
   }
 
   const turnStartedAt = Date.now();
@@ -1005,11 +1038,18 @@ async function sendAiTurnMessage(sessionId) {
     return;
   }
 
-  const { delayMs, targetTypingMs } = getAiSendDelay({
+  const sendDelay = getAiSendDelay({
     replyText: replyResult.text,
     turnStartedAt,
     turnEndsAt: session.turnEndsAt,
   });
+  const { targetTypingMs } = sendDelay;
+  let delayMs = sendDelay.delayMs;
+
+  // Near the buzzer, shorten the typing so the final message actually lands.
+  if (endgameQuickMessage) {
+    delayMs = Math.max(0, Math.min(delayMs, session.chatEndsAt - Date.now() - AI_ENDGAME_MSG_BUFFER_MS));
+  }
 
   markAiResponseStatus(session, {
     state: "typing",

@@ -7,6 +7,7 @@ const {
   AI_LOCK_HOSTILE_PROB,
   AI_LOCK_HOSTILE_SILENT_PROB,
   AI_LOCK_INSTEAD_PROB,
+  AI_LOCK_TIMEOUT_SHARE,
   AI_LOCK_PARTING_PROB,
   AI_LOCK_DELAY_AFTER_REPLY_MS,
   AI_LOCK_DELAY_AFTER_REPLY_STDDEV_MS,
@@ -215,6 +216,11 @@ function decideAiLock({ turnsSinceEligible, hostile, msLeftInChat, lockIntent = 
     if (Math.random() < AI_LOCK_HOSTILE_SILENT_PROB) {
       mode = "instead-of-reply"; // silent — no clapback, no sign-off
     }
+  } else if (Math.random() < AI_LOCK_TIMEOUT_SHARE) {
+    // Distracted / too slow to type: don't reply and don't actively lock — go
+    // silent and let the 25s turn timer run out, which auto-locks. Heavy bias
+    // keeps this rare vs. actually clicking guess.
+    mode = "timeout";
   } else if (Math.random() < AI_LOCK_INSTEAD_PROB) {
     // Bored / done talking: skip the reply, sometimes with a short casual sign-off.
     mode = "instead-of-reply";

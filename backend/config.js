@@ -1,4 +1,4 @@
-const CHAT_SECONDS = 90;
+const CHAT_SECONDS = 135;
 const TURN_SECONDS = 25;
 const FINAL_GUESS_SECONDS = 25;
 
@@ -37,6 +37,17 @@ module.exports = {
   AI_LOCK_DELAY_INSTEAD_STDDEV_MS: 1400,
   AI_LOCK_DELAY_MIN_MS: 500,
   AI_LOCK_DELAY_MAX_MS: 9000,
+  // Heavy bias to actively "clicking guess"; this small share instead lets the AI
+  // go silent and run its 25s turn timer out, like a distracted/slow human, which
+  // auto-locks. Never applied to hostile locks.
+  AI_LOCK_TIMEOUT_SHARE: 0.12,
+  // Endgame: when an eligible AI turn starts with less than this much chat time
+  // left, it behaves like a person short on time (pure chance, no LLM): click
+  // guess now, let the clock run out, or fire one quick last message.
+  AI_ENDGAME_MS: 13000,
+  AI_ENDGAME_LOCK_PROB: 0.4, // click guess early
+  AI_ENDGAME_QUIET_PROB: 0.35, // let the clock run out (remainder = quick message)
+  AI_ENDGAME_MSG_BUFFER_MS: 1500, // land the quick final message this far before the buzzer
   AI_TYPING_MAX_RATIO: 0.82,
   AI_TYPING_MIN_RATIO: 0.05,
   AI_TYPING_WPM: Number(process.env.AI_TYPING_WPM) || 60,
