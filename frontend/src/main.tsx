@@ -10,6 +10,7 @@ import {
   EMPTY_TURN_STATE,
   FINAL_GUESS_SECONDS,
   HISTORY_PATH,
+  LEADERBOARD_PATH,
   MATCH_FOUND_HOLD_MS,
   MIN_MESSAGES_PER_SIDE,
   SOCKET_URL,
@@ -54,6 +55,7 @@ import {
 import { AdminConsole } from "./components/AdminConsole";
 import { ChatRoom } from "./components/ChatRoom";
 import { History } from "./components/History";
+import { Leaderboard } from "./components/Leaderboard";
 import {
   AiGuessScreen,
   HumanGuessScreen,
@@ -74,6 +76,10 @@ function App() {
 
   if (path === HISTORY_PATH) {
     return <History />;
+  }
+
+  if (path === LEADERBOARD_PATH) {
+    return <Leaderboard />;
   }
 
   return <GameApp />;

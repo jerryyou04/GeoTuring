@@ -165,6 +165,18 @@ export interface AdminHistoryResponse {
   games: AdminHistoryEntry[];
 }
 
+export interface LeaderboardEntry {
+  rank: number;
+  name: string;
+  games: number;
+  readAccuracy: number;
+}
+
+export interface LeaderboardResponse {
+  enabled: boolean;
+  players: LeaderboardEntry[];
+}
+
 export interface PersistentScore {
   readEarned: number;
   readPossible: number;

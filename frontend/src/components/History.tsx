@@ -61,6 +61,10 @@ export function History() {
             <span className="navIcon ghost" aria-hidden="true">↺</span>
             History
           </a>
+          <a className="navItem" href="/leaderboard">
+            <span className="navIcon ghost" aria-hidden="true">★</span>
+            Leaderboard
+          </a>
         </nav>
       </aside>
 

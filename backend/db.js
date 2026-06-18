@@ -221,10 +221,32 @@ async function getAllHistory({ limit = 25, offset = 0, playerId = "" } = {}) {
   };
 }
 
+// Per-player aggregates used to seed the Redis leaderboard on boot.
+async function getLeaderboardSeed() {
+  if (!enabled) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `SELECT player_id,
+            COUNT(*)::int AS games,
+            COALESCE(SUM(read_earned), 0)::int AS read_sum
+       FROM game_history
+      GROUP BY player_id`,
+  );
+
+  return result.rows.map((row) => ({
+    playerId: row.player_id,
+    games: Number(row.games),
+    readSum: Number(row.read_sum),
+  }));
+}
+
 module.exports = {
   isDbEnabled,
   initDb,
   saveGameHistory,
   getPlayerHistory,
   getAllHistory,
+  getLeaderboardSeed,
 };

@@ -1824,6 +1824,82 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Leaderboard */
+.nameEditor {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.nameEditor label {
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.nameEditorRow {
+  display: flex;
+  gap: 8px;
+}
+
+.nameEditorRow input {
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.nameHint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+
+.leaderboardList {
+  display: grid;
+  gap: 8px;
+  min-width: 480px;
+}
+
+.leaderboardRow {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 90px 130px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.9rem;
+}
+
+.leaderboardRow.leaderboardHead {
+  padding: 2px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.leaderboardRank {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.leaderboardName {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .historyTag {
   display: inline-flex;
   padding: 4px 10px;

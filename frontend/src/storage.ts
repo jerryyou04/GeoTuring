@@ -3,6 +3,7 @@ import {
   EMPTY_PERSISTENT_SCORE,
   IP_LOCATION_STORAGE_KEY,
   LOCATION_CONSENT_STORAGE_KEY,
+  NAME_STORAGE_KEY,
   PLAYER_ID_STORAGE_KEY,
   SCORE_STORAGE_KEY,
 } from "./config";
@@ -57,6 +58,30 @@ export function saveLocationConsent(agreed: boolean) {
     window.localStorage.setItem(LOCATION_CONSENT_STORAGE_KEY, String(agreed));
   } catch {
     // The current checkbox state still works if storage is unavailable.
+  }
+}
+
+export function loadName(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    return (window.localStorage.getItem(NAME_STORAGE_KEY) || "").slice(0, 20);
+  } catch {
+    return "";
+  }
+}
+
+export function saveName(name: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(NAME_STORAGE_KEY, name.slice(0, 20));
+  } catch {
+    // ignore storage failures
   }
 }
 

@@ -52,6 +52,7 @@ const {
 const { registerAdminRoutes } = require("./admin");
 const { createQueueService } = require("./queue");
 const db = require("./db");
+const redis = require("./redis");
 const {
   createAiResponseStatus,
   decideAiLock,
@@ -105,6 +106,62 @@ app.get("/api/history", async (req, res) => {
   }
 });
 
+const PLAYER_ID_RE = /^[a-zA-Z0-9_-]{8,80}$/;
+
+function autoPlayerName(playerId) {
+  return `Player-${String(playerId).slice(0, 4)}`;
+}
+
+function sanitizeDisplayName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 20);
+}
+
+app.post("/api/name", async (req, res) => {
+  const playerId = String(req.body?.playerId || "");
+
+  if (!PLAYER_ID_RE.test(playerId)) {
+    res.status(400).json({ error: "invalid_player" });
+    return;
+  }
+
+  const name = sanitizeDisplayName(req.body?.name);
+  await redis.setName(playerId, name);
+  res.json({ ok: true, enabled: redis.isRedisEnabled(), name });
+});
+
+app.get("/api/leaderboard", async (req, res) => {
+  if (!redis.isRedisEnabled()) {
+    res.json({ enabled: false, players: [] });
+    return;
+  }
+
+  const limit = Number.parseInt(req.query.limit, 10) || 25;
+
+  try {
+    const rows = await redis.getTopPlayers(limit);
+
+    if (rows === null) {
+      res.json({ enabled: false, players: [] });
+      return;
+    }
+
+    const players = rows.map((row, index) => ({
+      rank: index + 1,
+      name: row.name || autoPlayerName(row.playerId),
+      games: row.games,
+      readAccuracy: row.games > 0 ? row.readSum / row.games : 0,
+    }));
+
+    res.json({ enabled: true, players });
+  } catch (error) {
+    console.error("Leaderboard query failed:", error.message);
+    res.status(500).json({ error: "leaderboard_unavailable" });
+  }
+});
+
 function persistResultHistory(playerId, result, transcript = [], opponent = null) {
   if (!playerId || !result || !db.isDbEnabled()) {
     return;
@@ -135,6 +192,10 @@ function persistResultHistory(playerId, result, transcript = [], opponent = null
       transcript,
     })
     .catch((error) => console.error("Failed to save game history:", error.message));
+
+  // Mirror the per-player row into the Redis leaderboard (1:1 with the Postgres
+  // write, so the live index stays consistent with the boot seed). Fire-and-forget.
+  redis.bumpPlayer(playerId, result.score?.read?.earned ?? 0);
 }
 
 // The stored transcript is the chat from this player's own perspective
@@ -1471,5 +1532,14 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`GeoTuring backend listening on 0.0.0.0:${PORT}`);
-  db.initDb().catch((error) => console.error("Database init failed:", error.message));
+  db
+    .initDb()
+    .then(async () => {
+      // Seed the Redis leaderboard from Postgres (source of truth) so it includes
+      // all past games and self-heals if Redis was wiped. Idempotent.
+      if (redis.isRedisEnabled() && db.isDbEnabled()) {
+        await redis.seed(await db.getLeaderboardSeed());
+      }
+    })
+    .catch((error) => console.error("Database/leaderboard init failed:", error.message));
 });
