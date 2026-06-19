@@ -2629,15 +2629,25 @@ button:disabled {
     font-size: 16px;
   }
 
-  /* Sidebar top bar: let nav wrap instead of forcing a 320px-wide row. */
+  /* Sidebar top bar: brand on its own row, nav as wrapping pills below. */
+  .sidebar {
+    gap: 10px;
+    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px
+      max(12px, env(safe-area-inset-left));
+  }
+
   .sidebarNav {
-    flex: 1 1 auto;
+    display: flex;
+    flex: 1 1 100%;
     flex-wrap: wrap;
     gap: 8px;
   }
 
   .navItem {
-    min-width: 0;
+    width: auto;
+    flex: 0 1 auto;
+    min-height: 42px;
+    padding: 0 12px;
   }
 
   /* Trim header sizing so it doesn't dominate the small viewport. */
@@ -2657,7 +2667,7 @@ button:disabled {
   }
 
   .leaderboardRow {
-    grid-template-columns: 26px minmax(0, 1fr) auto auto;
+    grid-template-columns: 26px minmax(0, 1fr) 46px 64px;
     gap: 8px;
     padding: 11px 12px;
     font-size: 0.86rem;
@@ -2675,12 +2685,13 @@ button:disabled {
   }
 
   .historyList {
-    min-width: 560px;
+    min-width: 600px;
   }
 
   .historyRow {
-    gap: 10px;
-    font-size: 0.84rem;
+    grid-template-columns: 116px 76px 64px 84px 64px minmax(110px, 1fr);
+    gap: 8px;
+    font-size: 0.82rem;
   }
 
   /* Map: keep the chat + controls visible on short portrait phones. */
