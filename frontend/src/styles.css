@@ -63,6 +63,7 @@ body {
   min-height: 100vh;
   margin: 0;
   background: var(--bg);
+  overflow-x: hidden;
 }
 
 button,
@@ -103,7 +104,7 @@ button:disabled {
   height: 100dvh;
   flex-direction: column;
   gap: 22px;
-  padding: 22px 16px;
+  padding: max(22px, env(safe-area-inset-top)) 16px 22px max(16px, env(safe-area-inset-left));
   border-right: 1px solid var(--border);
   background: var(--surface);
 }
@@ -266,7 +267,8 @@ button:disabled {
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 22px;
-  padding: 28px 32px;
+  padding: 28px max(32px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom))
+    max(32px, env(safe-area-inset-left));
 }
 
 .topbar {
@@ -2608,5 +2610,86 @@ button:disabled {
 
   .roundLayout .guessMap {
     height: 320px;
+  }
+}
+
+@media (max-width: 560px) {
+  .appMain {
+    gap: 16px;
+    padding: 16px max(14px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom))
+      max(14px, env(safe-area-inset-left));
+  }
+
+  /* Inputs must stay >= 16px so iOS Safari doesn't auto-zoom on focus. */
+  .composer input,
+  .nameEditorRow input,
+  input[type="text"],
+  input[type="search"],
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Sidebar top bar: let nav wrap instead of forcing a 320px-wide row. */
+  .sidebarNav {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .navItem {
+    min-width: 0;
+  }
+
+  /* Trim header sizing so it doesn't dominate the small viewport. */
+  .topbar {
+    gap: 10px;
+  }
+
+  .eyebrow,
+  .roundLabel {
+    margin-bottom: 6px;
+    font-size: 0.7rem;
+  }
+
+  /* Leaderboard fits a phone width without horizontal scroll. */
+  .leaderboardList {
+    min-width: 0;
+  }
+
+  .leaderboardRow {
+    grid-template-columns: 26px minmax(0, 1fr) auto auto;
+    gap: 8px;
+    padding: 11px 12px;
+    font-size: 0.86rem;
+  }
+
+  .leaderboardRow.leaderboardHead {
+    padding: 2px 12px;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+  }
+
+  /* History keeps its horizontal scroll, but smoother and a touch tighter. */
+  .historyPanel {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .historyList {
+    min-width: 560px;
+  }
+
+  .historyRow {
+    gap: 10px;
+    font-size: 0.84rem;
+  }
+
+  /* Map: keep the chat + controls visible on short portrait phones. */
+  .roundLayout .guessMapShell,
+  .roundLayout .guessMap {
+    min-height: 280px;
+  }
+
+  .roundLayout .guessMap {
+    height: clamp(280px, 46dvh, 380px);
   }
 }
