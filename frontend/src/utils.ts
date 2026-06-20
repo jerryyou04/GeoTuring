@@ -1,4 +1,4 @@
-import type { AdminLocation, ChatMessage, IpLocation, MessageCounts } from "./types";
+import type { AdminLocation, ChatMessage, GameHistoryEntry, IpLocation, MessageCounts } from "./types";
 
 export function formatSeconds(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -24,6 +24,42 @@ export function formatTimestamp(value: number) {
     minute: "2-digit",
     second: "2-digit",
   }).format(value);
+}
+
+export function formatPlayedAt(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export function formatDetail(game: GameHistoryEntry) {
+  if (game.opponentType === "AI") {
+    if (!game.modelFamily) {
+      return "AI opponent";
+    }
+
+    if (!game.modelFamilyGuess) {
+      return `Was ${game.modelFamily}`;
+    }
+
+    return game.modelFamilyGuess === game.modelFamily
+      ? `${game.modelFamily} ✓`
+      : `Guessed ${game.modelFamilyGuess} · was ${game.modelFamily}`;
+  }
+
+  const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ");
+  const distance = game.distanceKm === null ? null : `${game.distanceKm.toLocaleString()} km off`;
+
+  return [place, distance].filter(Boolean).join(" · ") || "Human opponent";
 }
 
 export function shortSocketId(socketId: string) {

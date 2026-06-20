@@ -262,7 +262,8 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
-.appMain {
+.appMain,
+.appShell {
   display: grid;
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2407,7 +2408,7 @@ button:disabled {
 
 .adminHistoryRow {
   display: grid;
-  grid-template-columns: 150px minmax(80px, 1fr) auto 116px 28px 78px;
+  grid-template-columns: 150px minmax(80px, 0.9fr) auto 116px 28px 72px minmax(120px, 1.1fr) 78px;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -2520,7 +2521,8 @@ button:disabled {
 }
 
 @media (max-width: 820px) {
-  .appMain {
+  .appMain,
+  .appShell {
     padding: 18px;
   }
 
@@ -2614,7 +2616,8 @@ button:disabled {
 }
 
 @media (max-width: 560px) {
-  .appMain {
+  .appMain,
+  .appShell {
     gap: 16px;
     padding: 16px max(14px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom))
       max(14px, env(safe-area-inset-left));

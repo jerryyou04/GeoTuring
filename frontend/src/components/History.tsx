@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { API_URL } from "../config";
 import { loadOrCreatePlayerId } from "../storage";
 import type { GameHistoryEntry } from "../types";
+import { formatDetail, formatPlayedAt } from "../utils";
 import { TranscriptView } from "./TranscriptView";
 import { GuessSummary, roundStatus } from "./HistoryDetail";
 import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
@@ -159,42 +160,6 @@ function HistoryRow({ game }: { game: GameHistoryEntry }) {
   );
 }
 
-function formatDetail(game: GameHistoryEntry) {
-  if (game.opponentType === "AI") {
-    if (!game.modelFamily) {
-      return "AI opponent";
-    }
-
-    if (!game.modelFamilyGuess) {
-      return `Was ${game.modelFamily}`;
-    }
-
-    return game.modelFamilyGuess === game.modelFamily
-      ? `${game.modelFamily} ✓`
-      : `Guessed ${game.modelFamilyGuess} · was ${game.modelFamily}`;
-  }
-
-  const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ");
-  const distance = game.distanceKm === null ? null : `${game.distanceKm.toLocaleString()} km off`;
-
-  return [place, distance].filter(Boolean).join(" · ") || "Human opponent";
-}
-
 function formatScore(value: number) {
   return Math.round(value * 10) / 10;
-}
-
-function formatPlayedAt(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "—";
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }

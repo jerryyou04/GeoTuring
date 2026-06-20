@@ -14,14 +14,16 @@ import type {
 import {
   formatAiSource,
   formatAiState,
+  formatDetail,
   formatMs,
+  formatPlayedAt,
   formatTimestamp,
   locationText,
   shortSocketId,
 } from "../utils";
 import { StatusPill } from "./StatusPill";
 import { TranscriptView } from "./TranscriptView";
-import { GuessSummary } from "./HistoryDetail";
+import { GuessSummary, roundStatus } from "./HistoryDetail";
 
 export function AdminConsole() {
   const [password, setPassword] = useState("");
@@ -370,7 +372,7 @@ function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pair
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="adminHistoryWhen">{formatTimestamp(new Date(game.playedAt).getTime())}</span>
+        <span className="adminHistoryWhen">{formatPlayedAt(game.playedAt)}</span>
         <code className="adminHistoryPlayer">{game.playerId}</code>
         <span className="adminHistoryTagCell">
           <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
@@ -392,6 +394,10 @@ function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pair
         <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
           {game.correctIdentity ? "✓" : "✗"}
         </span>
+        <span className={`historyMono roundStatus-${roundStatus(game)}`}>
+          {round1(game.roundEarned)}/{game.roundPossible}
+        </span>
+        <span className="historyDetail">{formatDetail(game)}</span>
         <span className="adminHistoryCount">{messageCount} msg{expanded ? " ▾" : " ▸"}</span>
       </button>
       {expanded && (
