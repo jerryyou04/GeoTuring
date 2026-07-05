@@ -5,7 +5,15 @@ import type { Pin, ResultPayload, SubmittedGuess } from "../types";
 const CORRECT_MARKER = createRevealMarker("correct");
 const GUESS_MARKER = createRevealMarker("guess");
 
-export function Reveal({ result, onRestart }: { result: ResultPayload; onRestart: () => void }) {
+export function Reveal({
+  result,
+  onRestart,
+  serverClockOffsetMs = 0,
+}: {
+  result: ResultPayload;
+  onRestart: () => void;
+  serverClockOffsetMs?: number;
+}) {
   const isHumanRound = result.actual.participantType === "Human";
   const correct = result.correctIdentity;
   const verdict = correct ? "Correct read" : "Wrong read";
@@ -38,7 +46,9 @@ export function Reveal({ result, onRestart }: { result: ResultPayload; onRestart
         />
       </div>
 
-      {isHumanRound ? <HumanReveal result={result} /> : <AiReveal result={result} />}
+      {isHumanRound
+        ? <HumanReveal result={result} serverClockOffsetMs={serverClockOffsetMs} />
+        : <AiReveal result={result} serverClockOffsetMs={serverClockOffsetMs} />}
 
       <p className="explanation resultExplanation">{result.explanation}</p>
       <button className="primaryButton" onClick={onRestart}>
@@ -48,7 +58,7 @@ export function Reveal({ result, onRestart }: { result: ResultPayload; onRestart
   );
 }
 
-function HumanReveal({ result }: { result: ResultPayload }) {
+function HumanReveal({ result, serverClockOffsetMs }: { result: ResultPayload; serverClockOffsetMs: number }) {
   const actualPin = getActualPin(result.actual);
   const guessedHuman = result.guess.identityGuess === "Human";
   const yourGuessPin = guessedHuman ? result.guess.locationGuess : null;
@@ -75,7 +85,7 @@ function HumanReveal({ result }: { result: ResultPayload }) {
         title={guessedHuman ? "Your location guess" : "Correct human location"}
       />
       {opponentPending ? (
-        <OpponentPendingCard endsAt={result.opponentGuessEndsAt ?? null} />
+        <OpponentPendingCard endsAt={result.opponentGuessEndsAt ?? null} serverClockOffsetMs={serverClockOffsetMs} />
       ) : opponentGuess ? (
         opponentGuess.identityGuess === "Human" ? (
           <LocationComparison
@@ -102,7 +112,7 @@ function HumanReveal({ result }: { result: ResultPayload }) {
   );
 }
 
-function AiReveal({ result }: { result: ResultPayload }) {
+function AiReveal({ result, serverClockOffsetMs }: { result: ResultPayload; serverClockOffsetMs: number }) {
   const guessedAi = result.guess.identityGuess === "AI";
   const modelMatch = guessedAi && result.guess.modelFamilyGuess === result.actual.modelFamily;
 
@@ -122,14 +132,14 @@ function AiReveal({ result }: { result: ResultPayload }) {
           <AnswerLine label="Model family" value={result.actual.modelFamily || "Unknown"} />
         </AnswerCard>
       </div>
-      <AiOpponentRead result={result} />
+      <AiOpponentRead result={result} serverClockOffsetMs={serverClockOffsetMs} />
     </>
   );
 }
 
 // The flip side: the AI's own read of the human it was just talking to. Unlike a
 // human opponent, it also explains its reasoning.
-function AiOpponentRead({ result }: { result: ResultPayload }) {
+function AiOpponentRead({ result, serverClockOffsetMs }: { result: ResultPayload; serverClockOffsetMs: number }) {
   const opponentGuess = result.opponentGuess;
   const opponentPending = Boolean(result.opponentPending) && !opponentGuess;
   const opponentActualPin = getActualPin(result.opponentActual || null);
@@ -144,6 +154,7 @@ function AiOpponentRead({ result }: { result: ResultPayload }) {
       {opponentPending ? (
         <OpponentPendingCard
           endsAt={result.opponentGuessEndsAt ?? null}
+          serverClockOffsetMs={serverClockOffsetMs}
           title="The AI's guess"
           waitingText="The AI is deciding…"
         />
@@ -307,18 +318,20 @@ function OpponentPendingCard({
   endsAt,
   title = "Opponent's guess",
   waitingText = "Waiting for their answer…",
+  serverClockOffsetMs = 0,
 }: {
   endsAt: number | null;
   title?: string;
   waitingText?: string;
+  serverClockOffsetMs?: number;
 }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(Date.now() + serverClockOffsetMs);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    const timer = window.setInterval(() => setNow(Date.now() + serverClockOffsetMs), 500);
 
     return () => window.clearInterval(timer);
-  }, []);
+  }, [serverClockOffsetMs]);
 
   const secondsLeft = endsAt === null ? null : Math.max(0, Math.ceil((endsAt - now) / 1000));
 

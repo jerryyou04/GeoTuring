@@ -7,6 +7,8 @@ function buildSessionResumePayload(session, socketId) {
 
   return {
     sessionId: session.id,
+    serverNow: Date.now(),
+    chatStartsAt: session.chatStartsAt || null,
     chatEndsAt: session.chatEndsAt,
     chatSeconds: CHAT_SECONDS,
     intro: "An anonymous participant has joined.",

@@ -18,6 +18,7 @@ const {
   FINAL_GUESS_MS,
   FRONTEND_URL,
   GUESS_GRACE_SECONDS,
+  MATCH_FOUND_HOLD_MS,
   MIN_MESSAGES_PER_SIDE,
   PORT,
   TURN_MS,
@@ -460,7 +461,8 @@ const queueService = createQueueService({
 registerAdminRoutes(app, { sessions, waitingQueue, db });
 
 function createHumanSession(first, second) {
-  const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
+  const chatStartsAt = Date.now() + MATCH_FOUND_HOLD_MS;
+  const chatEndsAt = chatStartsAt + CHAT_SECONDS * 1000;
   const session = {
     id: cryptoRandomId(),
     mode: "human",
@@ -470,12 +472,14 @@ function createHumanSession(first, second) {
     },
     messages: [],
     createdAt: Date.now(),
+    chatStartsAt,
     chatEndsAt,
     ended: false,
     chatLocked: false,
     turnOwner: null,
     turnEndsAt: null,
     turnTimer: null,
+    startTurnTimer: null,
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
@@ -495,20 +499,23 @@ function createHumanSession(first, second) {
   [first.socket, second.socket].forEach((socket) => {
     socket.emit("session:created", {
       sessionId: session.id,
+      serverNow: Date.now(),
+      chatStartsAt: session.chatStartsAt,
       chatEndsAt: session.chatEndsAt,
       chatSeconds: CHAT_SECONDS,
       intro: "An anonymous participant has joined.",
     });
   });
 
-  startTurn(session, pick([first.socket.id, second.socket.id]));
+  scheduleInitialTurn(session, pick([first.socket.id, second.socket.id]));
 
   return session;
 }
 
 function createAiSession(socket, playerLocation, requestedModelFamily = null, queuedAt = Date.now()) {
   const modelFamily = MODEL_FAMILIES.includes(requestedModelFamily) ? requestedModelFamily : pick(MODEL_FAMILIES);
-  const chatEndsAt = Date.now() + CHAT_SECONDS * 1000;
+  const chatStartsAt = Date.now() + MATCH_FOUND_HOLD_MS;
+  const chatEndsAt = chatStartsAt + CHAT_SECONDS * 1000;
   const playerId = sanitizePlayerId(socket.data.playerId);
   const session = {
     id: cryptoRandomId(),
@@ -523,6 +530,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     },
     messages: [],
     createdAt: Date.now(),
+    chatStartsAt,
     chatEndsAt,
     submitted: false,
     disconnected: false,
@@ -531,6 +539,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     turnOwner: null,
     turnEndsAt: null,
     turnTimer: null,
+    startTurnTimer: null,
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
@@ -557,16 +566,19 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     requiredProfiles: 2,
     status: "found",
     queuedAt,
+    serverNow: Date.now(),
   });
 
   socket.emit("session:created", {
     sessionId: session.id,
+    serverNow: Date.now(),
+    chatStartsAt: session.chatStartsAt,
     chatEndsAt: session.chatEndsAt,
     chatSeconds: CHAT_SECONDS,
     intro: "An anonymous participant has joined.",
   });
 
-  startTurn(session, pick([socket.id, "partner"]));
+  scheduleInitialTurn(session, pick([socket.id, "partner"]));
 
   return session;
 }
@@ -581,6 +593,10 @@ function createHumanSessionPlayer(entry) {
     guess: null,
     result: null,
   };
+}
+
+function hasTurnExpired(session, now = Date.now()) {
+  return session.turnEndsAt !== null && now >= session.turnEndsAt;
 }
 
 function handleChatMessage(socket, payload = {}) {
@@ -606,6 +622,11 @@ function handleChatMessage(socket, payload = {}) {
       code: "not_your_turn",
       message: "Wait for your turn before sending a message.",
     });
+    return;
+  }
+
+  if (hasTurnExpired(session)) {
+    handleTurnTimeout(session.id, socket.id);
     return;
   }
 
@@ -643,6 +664,9 @@ function handleChatMessage(socket, payload = {}) {
   // close the chat. This is the "send a message then guess before they reply"
   // case from the AI's side (#4).
   if (session.aiLockPending) {
+    session.turnOwner = null;
+    session.turnEndsAt = null;
+    emitTurnState(session);
     return;
   }
 
@@ -724,6 +748,11 @@ function handleRoundLock(socket, payload = {}) {
 
   if (Date.now() >= session.chatEndsAt) {
     handleChatExpired(session.id);
+    return;
+  }
+
+  if (session.turnOwner && hasTurnExpired(session)) {
+    handleTurnTimeout(session.id, session.turnOwner);
     return;
   }
 
@@ -844,6 +873,11 @@ async function typeAndEmitSignoff(session, text) {
     return;
   }
 
+  if (hasTurnExpired(session)) {
+    handleTurnTimeout(session.id, "partner");
+    return;
+  }
+
   emitAiPartnerMessage(session, text);
 }
 
@@ -929,6 +963,7 @@ function resumeSession(socket, payload = {}) {
   if (session.chatLocked) {
     socket.emit("round:locked", {
       sessionId: session.id,
+      serverNow: Date.now(),
       guessEndsAt: session.finalGuessEndsAt,
       message: "The chat is locked. Make your final read.",
     });
@@ -1004,19 +1039,38 @@ function reattachSessionSocket(session, playerId, socket) {
   return socket.id;
 }
 
+function scheduleInitialTurn(session, owner) {
+  if (session.startTurnTimer) {
+    clearTimeout(session.startTurnTimer);
+  }
+
+  const delay = Math.max(0, (session.chatStartsAt || Date.now()) - Date.now());
+
+  session.startTurnTimer = setTimeout(() => {
+    session.startTurnTimer = null;
+    startTurn(session, owner);
+  }, delay);
+}
+
 function startTurn(session, owner) {
-  if (!sessions.has(session.id) || session.ended) {
+  if (!sessions.has(session.id) || session.ended || session.chatLocked) {
+    return;
+  }
+
+  if (Date.now() >= session.chatEndsAt) {
+    handleChatExpired(session.id);
     return;
   }
 
   clearTurnTimer(session);
   session.timeout = null;
   session.turnOwner = owner;
-  session.turnEndsAt = Date.now() + TURN_MS;
+  session.turnEndsAt = Math.min(Date.now() + TURN_MS, session.chatEndsAt);
   emitTurnState(session);
+  const turnDelay = Math.max(0, session.turnEndsAt - Date.now());
 
   if (owner === "partner" && session.mode === "ai") {
-    session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), TURN_MS);
+    session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), turnDelay);
     sendAiTurnMessage(session.id).catch((error) => {
       console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
       markAiResponseStatus(session, {
@@ -1027,7 +1081,7 @@ function startTurn(session, owner) {
     return;
   }
 
-  session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), TURN_MS);
+  session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), turnDelay);
 }
 
 async function sendAiTurnMessage(sessionId) {
@@ -1211,6 +1265,11 @@ function handleTurnTimeout(sessionId, owner) {
     return;
   }
 
+  if (Date.now() >= session.chatEndsAt) {
+    handleChatExpired(sessionId);
+    return;
+  }
+
   clearTurnTimer(session);
 
   if (!isGuessReady(session)) {
@@ -1277,6 +1336,7 @@ function buildTurnPayload(session, socketId, message = "") {
 
   return {
     sessionId: session.id,
+    serverNow: Date.now(),
     currentTurn,
     turnEndsAt: session.turnEndsAt,
     canGuessEarly: false,
@@ -1392,6 +1452,7 @@ function emitSessionEnded(session, message) {
     Object.keys(session.players).forEach((socketId) => {
       io.to(socketId).emit("session:ended", {
         sessionId: session.id,
+        serverNow: Date.now(),
         message,
       });
     });
@@ -1400,6 +1461,7 @@ function emitSessionEnded(session, message) {
 
   io.to(session.playerSocketId).emit("session:ended", {
     sessionId: session.id,
+    serverNow: Date.now(),
     message,
   });
 }
@@ -1409,6 +1471,7 @@ function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The 
     Object.keys(session.players).forEach((socketId) => {
       io.to(socketId).emit("round:locked", {
         sessionId: session.id,
+        serverNow: Date.now(),
         guessEndsAt: session.finalGuessEndsAt,
         message:
           lockerSocketId === socketId
@@ -1423,6 +1486,7 @@ function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The 
 
   io.to(session.playerSocketId).emit("round:locked", {
     sessionId: session.id,
+    serverNow: Date.now(),
     guessEndsAt: session.finalGuessEndsAt,
     message: fallbackMessage,
   });
@@ -1491,6 +1555,10 @@ function deleteSession(sessionId) {
   if (session.expireTimer) {
     clearTimeout(session.expireTimer);
   }
+  if (session.startTurnTimer) {
+    clearTimeout(session.startTurnTimer);
+    session.startTurnTimer = null;
+  }
   if (session.chatTimer) {
     clearTimeout(session.chatTimer);
   }
@@ -1508,7 +1576,7 @@ function deleteSession(sessionId) {
 }
 
 function scheduleSessionExpiry(session) {
-  const ttlMs = CHAT_SECONDS * 1000 + GUESS_GRACE_SECONDS * 1000;
+  const ttlMs = MATCH_FOUND_HOLD_MS + CHAT_SECONDS * 1000 + GUESS_GRACE_SECONDS * 1000;
 
   session.expireTimer = setTimeout(() => {
     deleteSession(session.id);
@@ -1524,6 +1592,11 @@ io.on("connection", (socket) => {
   socket.on("queue:test_ai", (payload = {}) => queueService.createRequestedAiSession(socket, payload));
   socket.on("queue:leave", () => queueService.removeFromQueue(socket.id));
   socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
+  socket.on("clock:sync", (payload = {}, acknowledge) => {
+    if (typeof acknowledge === "function") {
+      acknowledge({ serverNow: Date.now() });
+    }
+  });
   socket.on("chat:message", (payload = {}) => handleChatMessage(socket, payload));
   socket.on("round:lock", (payload = {}) => handleRoundLock(socket, payload));
   socket.on("guess:submit", (payload = {}) => handleGuessSubmit(socket, payload));

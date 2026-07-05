@@ -14,7 +14,6 @@ import {
   MATCH_FOUND_HOLD_MS,
   MIN_MESSAGES_PER_SIDE,
   SOCKET_URL,
-  TURN_SECONDS,
 } from "./config";
 import type {
   ChatErrorPayload,
@@ -30,6 +29,7 @@ import type {
   QueueStatus,
   QueueStatusPayload,
   ResultPayload,
+  ServerClockPayload,
   SessionCreatedPayload,
   SessionResumedPayload,
   TurnStatePayload,
@@ -89,6 +89,8 @@ function App() {
 function GameApp() {
   const playerIdRef = useRef(loadOrCreatePlayerId());
   const socketRef = useRef<Socket | null>(null);
+  const serverClockOffsetRef = useRef(0);
+  const hasSyncedServerClockRef = useRef(false);
   const queueStartedAtRef = useRef<number | null>(null);
   const queueFoundAtRef = useRef<number | null>(null);
   const queueTimersRef = useRef<number[]>([]);
@@ -126,6 +128,12 @@ function GameApp() {
 
     return Math.max(0, Math.ceil((chatEndsAt - now) / 1000));
   }, [chatEndsAt, now]);
+  const chatTimerExpired = phase === "chat" && chatEndsAt !== null && chatEndsAt <= now;
+  const turnTimerExpired =
+    phase === "chat" &&
+    turnState.currentTurn !== "paused" &&
+    turnState.turnEndsAt !== null &&
+    turnState.turnEndsAt <= now;
 
   const actualQueueSeconds = useMemo(() => {
     if (queueStatus === "found" && queueFrozenSeconds !== null) {
@@ -140,13 +148,21 @@ function GameApp() {
   }, [now, queueFrozenSeconds, queueStartedAt, queueStatus]);
 
   const chatCounts = turnState.counts || getVisibleMessageCounts(messages);
-  const canGuess = chatCounts.player >= MIN_MESSAGES_PER_SIDE && chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
-  const isPlayerTurn = phase === "chat" && turnState.currentTurn === "player";
+  const canGuess =
+    !chatTimerExpired &&
+    !turnTimerExpired &&
+    chatCounts.player >= MIN_MESSAGES_PER_SIDE &&
+    chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
+  const isPlayerTurn =
+    phase === "chat" &&
+    turnState.currentTurn === "player" &&
+    !chatTimerExpired &&
+    !turnTimerExpired;
   const isFinalGuessPhase = phase === "identity" || phase === "humanGuess" || phase === "aiGuess" || phase === "waitingGuess";
   const finalGuessExpired = isFinalGuessPhase && finalGuessEndsAt !== null && finalGuessEndsAt <= now;
-  const turnSecondsLeft = turnState.turnEndsAt
+  const turnSecondsLeft = turnState.turnEndsAt !== null
     ? Math.max(0, Math.ceil((turnState.turnEndsAt - now) / 1000))
-    : TURN_SECONDS;
+    : 0;
   const finalGuessSecondsLeft = finalGuessEndsAt
     ? Math.max(0, Math.ceil((finalGuessEndsAt - now) / 1000))
     : FINAL_GUESS_SECONDS;
@@ -156,10 +172,28 @@ function GameApp() {
       return;
     }
 
-    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    const timer = window.setInterval(() => setNow(getServerNow()), 500);
 
     return () => window.clearInterval(timer);
   }, [isFinalGuessPhase, phase]);
+
+  useEffect(() => {
+    if (phase !== "chat" && !isFinalGuessPhase) {
+      return;
+    }
+
+    const nextDeadline = [chatEndsAt, turnState.turnEndsAt, finalGuessEndsAt]
+      .filter((deadline): deadline is number => deadline !== null && deadline > getServerNow())
+      .sort((first, second) => first - second)[0];
+
+    if (!nextDeadline) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setNow(getServerNow()), Math.max(0, nextDeadline - getServerNow()));
+
+    return () => window.clearTimeout(timer);
+  }, [chatEndsAt, finalGuessEndsAt, isFinalGuessPhase, phase, turnState.turnEndsAt]);
 
   useEffect(() => {
     if (locationConsent && !ipLocation && locationStatus === "idle") {
@@ -225,10 +259,44 @@ function GameApp() {
     queueTimersRef.current = [];
   }
 
+  function getServerNow() {
+    return Date.now() + serverClockOffsetRef.current;
+  }
+
+  function syncServerClock(payload?: ServerClockPayload) {
+    const clientNow = Date.now();
+    const hasPayloadClock = payload && Number.isFinite(payload.serverNow);
+
+    if (hasPayloadClock && !hasSyncedServerClockRef.current) {
+      serverClockOffsetRef.current = Number(payload.serverNow) - clientNow;
+    }
+
+    const adjustedNow = clientNow + serverClockOffsetRef.current;
+    setNow(adjustedNow);
+    return adjustedNow;
+  }
+
+  function requestServerClockSync(socket: Socket) {
+    const sentAt = Date.now();
+
+    socket.timeout(2000).emit("clock:sync", {}, (error: unknown, payload?: ServerClockPayload) => {
+      if (error || !payload || !Number.isFinite(payload.serverNow)) {
+        return;
+      }
+
+      const receivedAt = Date.now();
+      const midpoint = sentAt + (receivedAt - sentAt) / 2;
+      serverClockOffsetRef.current = Number(payload.serverNow) - midpoint;
+      hasSyncedServerClockRef.current = true;
+      setNow(getServerNow());
+    });
+  }
+
   function applyQueueStatus(payload: QueueStatusPayload) {
+    syncServerClock(payload);
     const queuedAt = Number.isFinite(payload.queuedAt)
       ? payload.queuedAt
-      : queueStartedAtRef.current || Date.now();
+      : queueStartedAtRef.current || getServerNow();
 
     setConnectedProfiles(payload.connectedProfiles);
     setRequiredProfiles(payload.requiredProfiles);
@@ -245,8 +313,8 @@ function GameApp() {
     setQueueFrozenSeconds(null);
   }
 
-  function markQueueFound(queuedAt = queueStartedAtRef.current || Date.now()) {
-    const foundAt = queueFoundAtRef.current || Date.now();
+  function markQueueFound(queuedAt = queueStartedAtRef.current || getServerNow()) {
+    const foundAt = queueFoundAtRef.current || getServerNow();
 
     queueFoundAtRef.current = foundAt;
     queueStartedAtRef.current = queuedAt;
@@ -270,6 +338,7 @@ function GameApp() {
 
     socket.on("connect", () => {
       setConnection("connected");
+      requestServerClockSync(socket);
       socket.emit("session:resume", {
         playerId: playerIdRef.current,
         sessionId: activeSessionId,
@@ -281,6 +350,7 @@ function GameApp() {
     });
 
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      syncServerClock(payload);
       saveActiveSessionId(payload.sessionId);
       enterResumedSession(payload);
     });
@@ -296,6 +366,7 @@ function GameApp() {
     });
 
     socket.on("turn:update", (payload: TurnStatePayload) => {
+      syncServerClock(payload);
       setTurnState(payload);
 
       if (payload.message) {
@@ -338,9 +409,15 @@ function GameApp() {
       setPhase("chat");
     });
 
-    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number }) => {
+    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number; serverNow?: number }) => {
+      syncServerClock(payload);
       setPendingGuessConfirm(false);
       setFinalGuessEndsAt(payload.guessEndsAt || null);
+      setTurnState((current) => ({
+        ...current,
+        currentTurn: "paused",
+        turnEndsAt: null,
+      }));
       setMessages((current) => [
         ...current,
         {
@@ -369,10 +446,16 @@ function GameApp() {
       ]);
     });
 
-    socket.on("session:ended", (payload: { message?: string }) => {
+    socket.on("session:ended", (payload: { message?: string; serverNow?: number }) => {
+      syncServerClock(payload);
       removeActiveSessionId();
       const message = payload.message || "This round ended.";
       setEndMessage(message);
+      setTurnState((current) => ({
+        ...current,
+        currentTurn: "paused",
+        turnEndsAt: null,
+      }));
       setMessages((current) => [
         ...current,
         {
@@ -386,6 +469,7 @@ function GameApp() {
     });
 
     socket.on("session:result", (payload: ResultPayload) => {
+      setNow(getServerNow());
       recordPersistentScore(payload);
       setResult(payload);
       setFinalGuessEndsAt(null);
@@ -428,7 +512,7 @@ function GameApp() {
 
     clearQueueUiTimers();
 
-    const queuedAt = Date.now();
+    const queuedAt = getServerNow();
 
     setPhase("matching");
     setConnection("connecting");
@@ -460,6 +544,7 @@ function GameApp() {
 
     socket.on("connect", () => {
       setConnection("connected");
+      requestServerClockSync(socket);
       socket.emit("queue:join", {
         playerId: playerIdRef.current,
         sessionId: loadActiveSessionId(),
@@ -486,15 +571,17 @@ function GameApp() {
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
+      syncServerClock(payload);
       hiddenAiRequestPendingRef.current = false;
       markQueueFound();
       saveActiveSessionId(payload.sessionId);
       queueTimersRef.current.push(
-        window.setTimeout(() => enterChat(payload), getQueueTransitionDelay()),
+        window.setTimeout(() => enterChat(payload), getChatStartDelay(payload)),
       );
     });
 
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      syncServerClock(payload);
       saveActiveSessionId(payload.sessionId);
       enterResumedSession(payload);
     });
@@ -508,6 +595,7 @@ function GameApp() {
     });
 
     socket.on("turn:update", (payload: TurnStatePayload) => {
+      syncServerClock(payload);
       setTurnState(payload);
 
       if (payload.message) {
@@ -550,9 +638,15 @@ function GameApp() {
       setPhase("chat");
     });
 
-    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number }) => {
+    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number; serverNow?: number }) => {
+      syncServerClock(payload);
       setPendingGuessConfirm(false);
       setFinalGuessEndsAt(payload.guessEndsAt || null);
+      setTurnState((current) => ({
+        ...current,
+        currentTurn: "paused",
+        turnEndsAt: null,
+      }));
       setMessages((current) => [
         ...current,
         {
@@ -581,10 +675,16 @@ function GameApp() {
       ]);
     });
 
-    socket.on("session:ended", (payload: { message?: string }) => {
+    socket.on("session:ended", (payload: { message?: string; serverNow?: number }) => {
+      syncServerClock(payload);
       removeActiveSessionId();
       const message = payload.message || "This round ended.";
       setEndMessage(message);
+      setTurnState((current) => ({
+        ...current,
+        currentTurn: "paused",
+        turnEndsAt: null,
+      }));
       setMessages((current) => [
         ...current,
         {
@@ -598,6 +698,7 @@ function GameApp() {
     });
 
     socket.on("session:result", (payload: ResultPayload) => {
+      setNow(getServerNow());
       recordPersistentScore(payload);
       setResult(payload);
       setFinalGuessEndsAt(null);
@@ -692,7 +793,7 @@ function GameApp() {
       return;
     }
 
-    const guessEndsAt = Date.now() + FINAL_GUESS_SECONDS * 1000;
+    const guessEndsAt = getServerNow() + FINAL_GUESS_SECONDS * 1000;
 
     setPendingGuessConfirm(false);
     setFinalGuessEndsAt((current) => current || guessEndsAt);
@@ -755,17 +856,23 @@ function GameApp() {
   }
 
   function getQueueTransitionDelay() {
-    const foundAt = queueFoundAtRef.current || Date.now();
-    const elapsed = Date.now() - foundAt;
+    const foundAt = queueFoundAtRef.current || getServerNow();
+    const elapsed = getServerNow() - foundAt;
 
     queueFoundAtRef.current = foundAt;
     return Math.max(0, MATCH_FOUND_HOLD_MS - elapsed);
   }
 
+  function getChatStartDelay(payload: SessionCreatedPayload) {
+    return Number.isFinite(payload.chatStartsAt)
+      ? Math.max(0, Number(payload.chatStartsAt) - getServerNow())
+      : getQueueTransitionDelay();
+  }
+
   function enterChat(payload: SessionCreatedPayload) {
     setSessionId(payload.sessionId);
     setChatEndsAt(payload.chatEndsAt);
-    setNow(Date.now());
+    setNow(getServerNow());
     setMessages((current) => {
       const introMessage: ChatMessage = {
         id: "intro",
@@ -786,7 +893,7 @@ function GameApp() {
     clearQueueUiTimers();
     setSessionId(payload.sessionId);
     setChatEndsAt(payload.chatEndsAt);
-    setNow(Date.now());
+    setNow(getServerNow());
     setMessages(
       payload.messages.length
         ? payload.messages
@@ -995,7 +1102,13 @@ function GameApp() {
             />
           )}
           {phase === "waitingGuess" && <WaitingGuessScreen secondsLeft={finalGuessSecondsLeft} />}
-          {phase === "reveal" && result && <Reveal result={result} onRestart={restart} />}
+          {phase === "reveal" && result && (
+            <Reveal
+              result={result}
+              serverClockOffsetMs={serverClockOffsetRef.current}
+              onRestart={restart}
+            />
+          )}
         </section>
       )}
       </main>

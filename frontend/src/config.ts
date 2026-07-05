@@ -14,7 +14,7 @@ export const ADMIN_API_PATH = "/admin/host-monitor";
 export const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 export const MIN_MESSAGES_PER_SIDE = 2;
 export const TURN_SECONDS = 25;
-export const FINAL_GUESS_SECONDS = 30;
+export const FINAL_GUESS_SECONDS = 25;
 export const MATCH_FOUND_HOLD_MS = 1800;
 
 export const EMPTY_TURN_STATE: TurnStatePayload = {

@@ -51,30 +51,48 @@ export function ChatRoom({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const followLatestRef = useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const canSend = draft.trim().length > 0 && isPlayerTurn && !isEnded && !isLocked;
+  const roundExpired = !isEnded && !isLocked && secondsLeft <= 0;
+  const turnExpired = !isEnded && !isLocked && turnState.currentTurn !== "paused" && turnSecondsLeft <= 0;
+  const timerExpired = roundExpired || turnExpired;
+  const canSend = draft.trim().length > 0 && isPlayerTurn && !isEnded && !isLocked && !timerExpired;
   const guessLabel = canGuess
     ? "Guess"
     : `Guess ${Math.min(counts.player, MIN_MESSAGES_PER_SIDE)}/${MIN_MESSAGES_PER_SIDE} ${Math.min(
       counts.partner,
       MIN_MESSAGES_PER_SIDE,
     )}/${MIN_MESSAGES_PER_SIDE}`;
-  const turnLabel =
-    turnState.currentTurn === "player"
-      ? "Your turn"
-      : turnState.currentTurn === "partner"
-        ? "Their turn"
-        : turnState.canAbort
-          ? "Ready"
-          : "Waiting";
+  const turnLabel = roundExpired
+    ? "Time up"
+    : turnExpired
+      ? "Turn ended"
+      : turnState.currentTurn === "player"
+        ? "Your turn"
+        : turnState.currentTurn === "partner"
+          ? "Their turn"
+          : turnState.canAbort
+            ? "Ready"
+            : "Waiting";
   const turnClockLabel = isEnded
     ? "--"
     : isLocked
       ? `${finalGuessSecondsLeft}s`
-      : turnState.currentTurn === "paused"
-        ? "--"
-        : `${turnSecondsLeft}s`;
+      : timerExpired
+        ? "0s"
+        : turnState.currentTurn === "paused"
+          ? "--"
+          : `${turnSecondsLeft}s`;
   const showPartnerTyping = !isEnded && !isLocked && turnState.currentTurn === "partner";
   const roundClockValue = isLocked ? "Locked" : formatSeconds(secondsLeft);
+  const inputPlaceholder = roundExpired
+    ? "Round time expired..."
+    : turnExpired
+      ? "Turn time expired..."
+      : isPlayerTurn
+        ? "Ask something revealing..."
+        : "Waiting for their message...";
+  const expiredMessage = roundExpired
+    ? "Round time expired. Waiting for the final state."
+    : "Turn time expired. Waiting for the final state.";
 
   useEffect(() => {
     const newestMessage = messages[messages.length - 1];
@@ -143,6 +161,7 @@ export function ChatRoom({
       </div>
 
       {isEnded && <div className="chatEndedBanner">{endMessage || "This round ended."}</div>}
+      {!isEnded && !isLocked && timerExpired && <div className="chatEndedBanner">{expiredMessage}</div>}
 
       <div className="messagesShell">
         <div className="messages" aria-live="polite" ref={messagesRef} onScroll={handleMessagesScroll}>
@@ -192,16 +211,16 @@ export function ChatRoom({
           <form className="composer" onSubmit={onSend}>
             <input
               ref={inputRef}
-              disabled={!isPlayerTurn}
+              disabled={!isPlayerTurn || timerExpired}
               maxLength={400}
               value={draft}
               onChange={(event) => onDraft(event.target.value)}
-              placeholder={isPlayerTurn ? "Ask something revealing..." : "Waiting for their message..."}
+              placeholder={inputPlaceholder}
             />
             <button disabled={!canSend} type="submit">
               Send
             </button>
-            <button className="secondaryButton" disabled={!canGuess} type="button" onClick={onGuess}>
+            <button className="secondaryButton" disabled={!canGuess || timerExpired} type="button" onClick={onGuess}>
               {guessLabel}
             </button>
           </form>

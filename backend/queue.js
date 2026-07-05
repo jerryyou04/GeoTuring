@@ -124,6 +124,7 @@ function createQueueService({
       requiredProfiles: 2,
       status: "searching",
       queuedAt: entry.queuedAt,
+      serverNow: Date.now(),
     });
   }
 
@@ -134,6 +135,7 @@ function createQueueService({
         requiredProfiles: 2,
         status: "found",
         queuedAt: entry.queuedAt,
+        serverNow: Date.now(),
       });
     });
   }

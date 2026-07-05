@@ -3,6 +3,10 @@ export type IdentityGuess = "Human" | "AI";
 export type ModelFamily = "ChatGPT" | "Gemini" | "Claude" | "Grok";
 export type QueueStatus = "idle" | "searching" | "found";
 
+export interface ServerClockPayload {
+  serverNow?: number;
+}
+
 export interface ChatMessage {
   id: string;
   author: "player" | "partner" | "system";
@@ -10,8 +14,9 @@ export interface ChatMessage {
   sentAt: number;
 }
 
-export interface SessionCreatedPayload {
+export interface SessionCreatedPayload extends ServerClockPayload {
   sessionId: string;
+  chatStartsAt?: number | null;
   chatEndsAt: number;
   chatSeconds: number;
   intro: string;
@@ -24,7 +29,7 @@ export interface SessionResumedPayload extends SessionCreatedPayload {
   submitted: boolean;
 }
 
-export interface QueueStatusPayload {
+export interface QueueStatusPayload extends ServerClockPayload {
   connectedProfiles: number;
   requiredProfiles: number;
   status: QueueStatus;
@@ -54,7 +59,7 @@ export interface MessageCounts {
   partner: number;
 }
 
-export interface TurnStatePayload {
+export interface TurnStatePayload extends ServerClockPayload {
   sessionId: string;
   currentTurn: "player" | "partner" | "paused";
   turnEndsAt: number | null;
