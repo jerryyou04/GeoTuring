@@ -18,6 +18,7 @@ import {
 import type {
   ChatErrorPayload,
   ChatMessage,
+  ChatSendAck,
   GuessErrorPayload,
   IdentityGuess,
   IpLocation,
@@ -88,7 +89,23 @@ function App() {
 
 function GameApp() {
   const playerIdRef = useRef(loadOrCreatePlayerId());
+  const currentSessionIdRef = useRef(loadActiveSessionId() || "");
   const socketRef = useRef<Socket | null>(null);
+  const gameGenerationRef = useRef(0);
+  const sendingMessageRef = useRef(false);
+  const pendingMessageRef = useRef<{
+    sessionId: string;
+    clientMessageId: string;
+    requestId: string;
+    text: string;
+  } | null>(null);
+  const activeSendRequestRef = useRef("");
+  const locallyEndedSessionRef = useRef("");
+  const terminalSessionRef = useRef<{
+    sessionId: string;
+    phase: "ended" | "reveal";
+  } | null>(null);
+  const systemMessageSequenceRef = useRef(0);
   const serverClockOffsetRef = useRef(0);
   const hasSyncedServerClockRef = useRef(false);
   const queueStartedAtRef = useRef<number | null>(null);
@@ -96,9 +113,10 @@ function GameApp() {
   const queueTimersRef = useRef<number[]>([]);
   const hiddenAiRequestPendingRef = useRef(false);
   const scoredSessionsRef = useRef<Set<string>>(new Set());
-  const [phase, setPhase] = useState<Phase>("landing");
+  const [phase, setPhase] = useState<Phase>(() => currentSessionIdRef.current ? "matching" : "landing");
   const [connection, setConnection] = useState("idle");
-  const [sessionId, setSessionId] = useState("");
+  const [sessionReady, setSessionReady] = useState(false);
+  const [sessionId, setSessionId] = useState(currentSessionIdRef.current);
   const [chatEndsAt, setChatEndsAt] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -111,8 +129,8 @@ function GameApp() {
   const [pendingGuessConfirm, setPendingGuessConfirm] = useState(false);
   const [finalGuessEndsAt, setFinalGuessEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [queueStatus, setQueueStatus] = useState<QueueStatus>("idle");
-  const [connectedProfiles, setConnectedProfiles] = useState(0);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>(() => currentSessionIdRef.current ? "found" : "idle");
+  const [connectedProfiles, setConnectedProfiles] = useState(() => currentSessionIdRef.current ? 2 : 0);
   const [requiredProfiles, setRequiredProfiles] = useState(2);
   const [queueStartedAt, setQueueStartedAt] = useState<number | null>(null);
   const [queueFrozenSeconds, setQueueFrozenSeconds] = useState<number | null>(null);
@@ -152,22 +170,16 @@ function GameApp() {
     chatCounts.player >= MIN_MESSAGES_PER_SIDE &&
     chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
   const canGuess =
+    sessionReady &&
     !chatTimerExpired &&
     !turnTimerExpired &&
     hasRequiredMessages;
   const isPlayerTurn =
     phase === "chat" &&
+    sessionReady &&
     turnState.currentTurn === "player" &&
     !chatTimerExpired &&
     !turnTimerExpired;
-  // Render true early timeouts as ended immediately, but keep the stored session
-  // until the server confirms. A last-moment accepted message can still advance
-  // the turn instead of aborting the round.
-  const autoAbortMessage = !hasRequiredMessages && chatTimerExpired
-    ? "The round ended because time ran out before enough messages were exchanged."
-    : !hasRequiredMessages && turnTimerExpired
-      ? "The round auto-aborted because the turn timer expired before enough messages were exchanged."
-      : "";
   const isFinalGuessPhase = phase === "identity" || phase === "humanGuess" || phase === "aiGuess" || phase === "waitingGuess";
   const finalGuessExpired = isFinalGuessPhase && finalGuessEndsAt !== null && finalGuessEndsAt <= now;
   const turnSecondsLeft = turnState.turnEndsAt !== null
@@ -206,13 +218,44 @@ function GameApp() {
   }, [chatEndsAt, finalGuessEndsAt, isFinalGuessPhase, phase, turnState.turnEndsAt]);
 
   useEffect(() => {
+    const activeSessionId = currentSessionIdRef.current;
+    const timeoutMessage = chatTimerExpired
+      ? "The round ended because time ran out before enough messages were exchanged."
+      : turnTimerExpired
+        ? "The round auto-aborted because the turn timer expired before enough messages were exchanged."
+        : "";
+
+    if (
+      phase !== "chat" ||
+      hasRequiredMessages ||
+      !activeSessionId ||
+      !timeoutMessage ||
+      locallyEndedSessionRef.current === activeSessionId
+    ) {
+      return;
+    }
+
+    locallyEndedSessionRef.current = activeSessionId;
+    sendingMessageRef.current = false;
+    setSessionReady(false);
+    setPendingGuessConfirm(false);
+    setEndMessage(timeoutMessage);
+    setTurnState((current) => ({
+      ...current,
+      currentTurn: "paused",
+      turnEndsAt: null,
+    }));
+    setPhase("ended");
+  }, [chatTimerExpired, hasRequiredMessages, phase, turnTimerExpired]);
+
+  useEffect(() => {
     if (locationConsent && !ipLocation && locationStatus === "idle") {
       fetchIpLocation();
     }
   }, [locationConsent, ipLocation, locationStatus]);
 
   useEffect(() => {
-    const activeSessionId = loadActiveSessionId();
+    const activeSessionId = currentSessionIdRef.current;
 
     if (activeSessionId) {
       resumeActiveSession(activeSessionId);
@@ -269,6 +312,78 @@ function GameApp() {
     queueTimersRef.current = [];
   }
 
+  function replaceGameSocket() {
+    const previousSocket = socketRef.current;
+    socketRef.current = null;
+    previousSocket?.removeAllListeners();
+    previousSocket?.disconnect();
+
+    const generation = ++gameGenerationRef.current;
+    const socket = io(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+    });
+    socketRef.current = socket;
+
+    return { generation, socket };
+  }
+
+  function isCurrentAttempt(socket: Socket, generation: number) {
+    return socketRef.current === socket && gameGenerationRef.current === generation;
+  }
+
+  function isCurrentSessionEvent(
+    socket: Socket,
+    generation: number,
+    payload: { sessionId?: string },
+  ) {
+    return isCurrentAttempt(socket, generation) &&
+      Boolean(payload.sessionId) &&
+      payload.sessionId === currentSessionIdRef.current;
+  }
+
+  function rememberSession(nextSessionId: string) {
+    currentSessionIdRef.current = nextSessionId;
+    setSessionId(nextSessionId);
+    saveActiveSessionId(nextSessionId);
+  }
+
+  function removeStoredSessionIfCurrent(expectedSessionId: string) {
+    if (expectedSessionId && loadActiveSessionId() === expectedSessionId) {
+      removeActiveSessionId();
+    }
+  }
+
+  function forgetCurrentSession(removeStoredSession = true) {
+    const forgottenSessionId = currentSessionIdRef.current;
+    currentSessionIdRef.current = "";
+    locallyEndedSessionRef.current = "";
+    terminalSessionRef.current = null;
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    setSessionId("");
+    if (removeStoredSession) {
+      removeStoredSessionIfCurrent(forgottenSessionId);
+    }
+    setSessionReady(false);
+    sendingMessageRef.current = false;
+  }
+
+  function appendMessage(message: ChatMessage) {
+    setMessages((current) => current.some((item) => item.id === message.id)
+      ? current
+      : [...current, message]);
+  }
+
+  function appendSystemMessage(sessionId: string, kind: string, text: string) {
+    systemMessageSequenceRef.current += 1;
+    appendMessage({
+      id: `system:${sessionId}:${kind}:${systemMessageSequenceRef.current}`,
+      author: "system",
+      text,
+      sentAt: Date.now(),
+    });
+  }
+
   function getServerNow() {
     return Date.now() + serverClockOffsetRef.current;
   }
@@ -286,11 +401,11 @@ function GameApp() {
     return adjustedNow;
   }
 
-  function requestServerClockSync(socket: Socket) {
+  function requestServerClockSync(socket: Socket, generation: number) {
     const sentAt = Date.now();
 
     socket.timeout(2000).emit("clock:sync", {}, (error: unknown, payload?: ServerClockPayload) => {
-      if (error || !payload || !Number.isFinite(payload.serverNow)) {
+      if (!isCurrentAttempt(socket, generation) || error || !payload || !Number.isFinite(payload.serverNow)) {
         return;
       }
 
@@ -341,11 +456,20 @@ function GameApp() {
     }
 
     clearQueueUiTimers();
-    removeActiveSessionId();
+    removeStoredSessionIfCurrent(payload.sessionId || currentSessionIdRef.current);
     const message = payload.message || "This round ended.";
-    const endedSessionId = payload.sessionId || sessionId || "current";
+    const endedSessionId = payload.sessionId || currentSessionIdRef.current || "current";
     const messageId = `session-ended:${endedSessionId}`;
 
+    locallyEndedSessionRef.current = "";
+    terminalSessionRef.current = {
+      sessionId: endedSessionId,
+      phase: "ended",
+    };
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    setSessionReady(false);
+    sendingMessageRef.current = false;
     setEndMessage(message);
     setPendingGuessConfirm(false);
     setFinalGuessEndsAt(null);
@@ -354,170 +478,277 @@ function GameApp() {
       currentTurn: "paused",
       turnEndsAt: null,
     }));
-    setMessages((current) => current.some((item) => item.id === messageId)
-      ? current
-      : [
-          ...current,
-          {
-            id: messageId,
-            author: "system",
-            text: message,
-            sentAt: Date.now(),
-          },
-        ]);
+    appendMessage({
+      id: messageId,
+      author: "system",
+      text: message,
+      sentAt: Date.now(),
+    });
     setPhase("ended");
+  }
+
+  function registerSocketStateListeners(socket: Socket, generation: number) {
+    socket.on("disconnect", () => {
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
+
+      setSessionReady(false);
+      sendingMessageRef.current = false;
+      activeSendRequestRef.current = "";
+      const pendingMessage = pendingMessageRef.current;
+
+      if (pendingMessage?.sessionId === currentSessionIdRef.current) {
+        setDraft((current) => current || pendingMessage.text);
+      }
+      setConnection("disconnected");
+    });
+
+    socket.on("connect_error", () => {
+      if (isCurrentAttempt(socket, generation)) {
+        setConnection("offline");
+      }
+    });
+  }
+
+  function registerSessionListeners(socket: Socket, generation: number) {
+    socket.on("partner:message", (payload: { sessionId: string; message: ChatMessage }) => {
+      if (isCurrentSessionEvent(socket, generation, payload)) {
+        appendMessage(payload.message);
+      }
+    });
+
+    socket.on("turn:update", (payload: TurnStatePayload) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      syncServerClock(payload);
+      setTurnState(payload);
+
+      if (
+        locallyEndedSessionRef.current === payload.sessionId &&
+        payload.turnEndsAt !== null &&
+        payload.turnEndsAt > getServerNow()
+      ) {
+        locallyEndedSessionRef.current = "";
+        setEndMessage("");
+        setSessionReady(true);
+        setPhase("chat");
+      }
+
+      if (payload.message) {
+        appendSystemMessage(payload.sessionId, "turn", payload.message);
+      }
+    });
+
+    socket.on("chat:error", (payload: ChatErrorPayload) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      const pendingMessage = pendingMessageRef.current;
+
+      if (
+        !payload.requestId ||
+        activeSendRequestRef.current !== payload.requestId ||
+        pendingMessage?.requestId !== payload.requestId
+      ) {
+        return;
+      }
+
+      activeSendRequestRef.current = "";
+      sendingMessageRef.current = false;
+      pendingMessageRef.current = null;
+      setDraft((current) => current || pendingMessage.text);
+      appendSystemMessage(
+        payload.sessionId!,
+        `chat-error:${payload.code || "unknown"}`,
+        payload.message || "Wait for your turn before sending a message.",
+      );
+    });
+
+    socket.on("guess:error", (payload: GuessErrorPayload) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      setPendingGuessConfirm(false);
+      setFinalGuessEndsAt(null);
+      appendSystemMessage(
+        payload.sessionId!,
+        `guess-error:${payload.code || "unknown"}`,
+        payload.message || "More messages are required before guessing.",
+      );
+      setPhase("chat");
+    });
+
+    socket.on(
+      "round:locked",
+      (payload: { sessionId: string; message?: string; guessEndsAt?: number; serverNow?: number }) => {
+        if (!isCurrentSessionEvent(socket, generation, payload)) {
+          return;
+        }
+
+        syncServerClock(payload);
+        locallyEndedSessionRef.current = "";
+        pendingMessageRef.current = null;
+        activeSendRequestRef.current = "";
+        sendingMessageRef.current = false;
+        setPendingGuessConfirm(false);
+        setFinalGuessEndsAt(payload.guessEndsAt || null);
+        setTurnState((current) => ({
+          ...current,
+          currentTurn: "paused",
+          turnEndsAt: null,
+        }));
+        appendSystemMessage(
+          payload.sessionId,
+          "round-locked",
+          payload.message || "The chat is locked. Make your final read.",
+        );
+        setPhase((current) => (
+          terminalSessionRef.current?.sessionId === payload.sessionId &&
+          terminalSessionRef.current.phase === "reveal"
+            ? current
+            : current === "waitingGuess" ? current : "identity"
+        ));
+      },
+    );
+
+    socket.on("partner:left", (payload: { sessionId: string; message?: string }) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      appendSystemMessage(
+        payload.sessionId,
+        "partner-left",
+        payload.message || "Your partner disconnected. You can still make your guess.",
+      );
+    });
+
+    socket.on("session:ended", (payload: { sessionId: string; message?: string; serverNow?: number }) => {
+      if (isCurrentSessionEvent(socket, generation, payload)) {
+        finishSessionAsEnded(payload);
+      }
+    });
+
+    socket.on("session:result", (payload: ResultPayload) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      setNow(getServerNow());
+      locallyEndedSessionRef.current = "";
+      terminalSessionRef.current = {
+        sessionId: payload.sessionId,
+        phase: "reveal",
+      };
+      pendingMessageRef.current = null;
+      activeSendRequestRef.current = "";
+      setSessionReady(false);
+      sendingMessageRef.current = false;
+      recordPersistentScore(payload);
+      setResult(payload);
+      setFinalGuessEndsAt(null);
+      removeStoredSessionIfCurrent(payload.sessionId);
+      setPhase("reveal");
+    });
+
+    socket.on(
+      "opponent:guess",
+      (payload: {
+        sessionId: string;
+        opponentGuess: ResultPayload["opponentGuess"];
+        opponentExplanation?: string | null;
+      }) => {
+        if (!isCurrentSessionEvent(socket, generation, payload)) {
+          return;
+        }
+
+        setResult((current) => current
+          ? {
+              ...current,
+              opponentGuess: payload.opponentGuess,
+              opponentExplanation: payload.opponentExplanation ?? null,
+              opponentPending: false,
+            }
+          : current);
+      },
+    );
+
+    socket.on("session:superseded", (payload: { sessionId: string }) => {
+      if (!isCurrentSessionEvent(socket, generation, payload)) {
+        return;
+      }
+
+      clearQueueUiTimers();
+      forgetCurrentSession(false);
+      setConnection("idle");
+      setMessages([]);
+      setPhase("landing");
+    });
   }
 
   function resumeActiveSession(activeSessionId: string) {
     clearQueueUiTimers();
+    currentSessionIdRef.current = activeSessionId;
+    setSessionId(activeSessionId);
+    setSessionReady(false);
+    setPhase("matching");
+    setQueueStatus("found");
+    setConnectedProfiles(2);
     setConnection("connecting");
-    socketRef.current?.disconnect();
-
-    const socket = io(SOCKET_URL, {
-      transports: ["websocket", "polling"],
-    });
-
-    socketRef.current = socket;
+    const { generation, socket } = replaceGameSocket();
+    registerSocketStateListeners(socket, generation);
+    registerSessionListeners(socket, generation);
 
     socket.on("connect", () => {
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
+
       setConnection("connected");
-      requestServerClockSync(socket);
+      setSessionReady(false);
+      requestServerClockSync(socket, generation);
       socket.emit("session:resume", {
         playerId: playerIdRef.current,
         sessionId: activeSessionId,
       });
     });
 
-    socket.on("disconnect", () => {
-      setConnection("disconnected");
-    });
-
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      if (!isCurrentAttempt(socket, generation) || payload.sessionId !== currentSessionIdRef.current) {
+        return;
+      }
+
       syncServerClock(payload);
-      saveActiveSessionId(payload.sessionId);
+      rememberSession(payload.sessionId);
       enterResumedSession(payload);
+      setSessionReady(true);
     });
 
     socket.on("session:resume_failed", () => {
-      removeActiveSessionId();
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
+
+      if (terminalSessionRef.current?.sessionId === currentSessionIdRef.current) {
+        socketRef.current = null;
+        socket.removeAllListeners();
+        socket.disconnect();
+        setSessionReady(false);
+        setConnection("idle");
+        return;
+      }
+
+      socketRef.current = null;
+      socket.removeAllListeners();
+      socket.disconnect();
+      forgetCurrentSession();
       setConnection("idle");
       setPhase("landing");
-    });
-
-    socket.on("partner:message", (payload: { message: ChatMessage }) => {
-      setMessages((current) => [...current, payload.message]);
-    });
-
-    socket.on("turn:update", (payload: TurnStatePayload) => {
-      syncServerClock(payload);
-      setTurnState(payload);
-
-      if (payload.message) {
-        setMessages((current) => [
-          ...current,
-          {
-            id: `${Date.now()}`,
-            author: "system",
-            text: payload.message,
-            sentAt: Date.now(),
-          },
-        ]);
-      }
-    });
-
-    socket.on("chat:error", (payload: ChatErrorPayload) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "Wait for your turn before sending a message.",
-          sentAt: Date.now(),
-        },
-      ]);
-    });
-
-    socket.on("guess:error", (payload: GuessErrorPayload) => {
-      setPendingGuessConfirm(false);
-      setFinalGuessEndsAt(null);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "More messages are required before guessing.",
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("chat");
-    });
-
-    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number; serverNow?: number }) => {
-      syncServerClock(payload);
-      setPendingGuessConfirm(false);
-      setFinalGuessEndsAt(payload.guessEndsAt || null);
-      setTurnState((current) => ({
-        ...current,
-        currentTurn: "paused",
-        turnEndsAt: null,
-      }));
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "The chat is locked. Make your final read.",
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase((current) => (current === "waitingGuess" ? current : "identity"));
-    });
-
-    socket.on("guess:submitted", () => {
-      setPhase("waitingGuess");
-    });
-
-    socket.on("partner:left", (payload: { message?: string }) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "Your partner disconnected. You can still make your guess.",
-          sentAt: Date.now(),
-        },
-      ]);
-    });
-
-    socket.on("session:ended", finishSessionAsEnded);
-
-    socket.on("session:result", (payload: ResultPayload) => {
-      setNow(getServerNow());
-      recordPersistentScore(payload);
-      setResult(payload);
-      setFinalGuessEndsAt(null);
-      removeActiveSessionId();
-      setPhase("reveal");
-    });
-
-    socket.on(
-      "opponent:guess",
-      (payload: { opponentGuess: ResultPayload["opponentGuess"]; opponentExplanation?: string | null }) => {
-        setResult((current) =>
-          current
-            ? {
-                ...current,
-                opponentGuess: payload.opponentGuess,
-                opponentExplanation: payload.opponentExplanation ?? null,
-                opponentPending: false,
-              }
-            : current,
-        );
-      },
-    );
-
-    socket.on("connect_error", () => {
-      setConnection("offline");
     });
   }
 
@@ -541,6 +772,7 @@ function GameApp() {
     setConnection("connecting");
     setResult(null);
     setEndMessage("");
+    setDraft("");
     setTurnState(EMPTY_TURN_STATE);
     setPendingGuessConfirm(false);
     setFinalGuessEndsAt(null);
@@ -557,35 +789,57 @@ function GameApp() {
     queueFoundAtRef.current = null;
     setQueueFrozenSeconds(null);
     setNow(queuedAt);
+    currentSessionIdRef.current = "";
+    locallyEndedSessionRef.current = "";
+    terminalSessionRef.current = null;
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    setSessionId("");
+    setSessionReady(false);
+    sendingMessageRef.current = false;
+    removeActiveSessionId();
 
-    socketRef.current?.disconnect();
-    const socket = io(SOCKET_URL, {
-      transports: ["websocket", "polling"],
-    });
-
-    socketRef.current = socket;
+    const { generation, socket } = replaceGameSocket();
+    registerSocketStateListeners(socket, generation);
+    registerSessionListeners(socket, generation);
 
     socket.on("connect", () => {
-      setConnection("connected");
-      requestServerClockSync(socket);
-      socket.emit("queue:join", {
-        playerId: playerIdRef.current,
-        sessionId: loadActiveSessionId(),
-        location: locationConsent ? ipLocation : null,
-      });
-    });
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
 
-    socket.on("disconnect", () => {
-      setConnection("disconnected");
+      setConnection("connected");
+      setSessionReady(false);
+      requestServerClockSync(socket, generation);
+
+      if (currentSessionIdRef.current) {
+        socket.emit("session:resume", {
+          playerId: playerIdRef.current,
+          sessionId: currentSessionIdRef.current,
+        });
+      } else {
+        socket.emit("queue:join", {
+          playerId: playerIdRef.current,
+          location: locationConsent ? ipLocation : null,
+        });
+      }
     });
 
     socket.on("queue:status", (payload: QueueStatusPayload) => {
-      applyQueueStatus(payload);
+      if (isCurrentAttempt(socket, generation) && !currentSessionIdRef.current) {
+        applyQueueStatus(payload);
+      }
     });
 
     socket.on("queue:error", (payload: QueueErrorPayload) => {
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
+
       hiddenAiRequestPendingRef.current = false;
       clearQueueUiTimers();
+      socketRef.current = null;
+      socket.removeAllListeners();
       socket.disconnect();
       setPhase("landing");
       setConnection("idle");
@@ -594,139 +848,60 @@ function GameApp() {
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
+      }
+
       syncServerClock(payload);
       hiddenAiRequestPendingRef.current = false;
       markQueueFound();
-      saveActiveSessionId(payload.sessionId);
+      rememberSession(payload.sessionId);
+      setSessionReady(true);
       queueTimersRef.current.push(
-        window.setTimeout(() => enterChat(payload), getChatStartDelay(payload)),
+        window.setTimeout(() => {
+          if (
+            isCurrentAttempt(socket, generation) &&
+            socket.connected &&
+            currentSessionIdRef.current === payload.sessionId
+          ) {
+            enterChat(payload);
+          }
+        }, getChatStartDelay(payload)),
       );
     });
 
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      if (!isCurrentAttempt(socket, generation) || payload.sessionId !== currentSessionIdRef.current) {
+        return;
+      }
+
       syncServerClock(payload);
-      saveActiveSessionId(payload.sessionId);
+      rememberSession(payload.sessionId);
       enterResumedSession(payload);
+      setSessionReady(true);
     });
 
     socket.on("session:resume_failed", () => {
-      removeActiveSessionId();
-    });
-
-    socket.on("partner:message", (payload: { message: ChatMessage }) => {
-      setMessages((current) => [...current, payload.message]);
-    });
-
-    socket.on("turn:update", (payload: TurnStatePayload) => {
-      syncServerClock(payload);
-      setTurnState(payload);
-
-      if (payload.message) {
-        setMessages((current) => [
-          ...current,
-          {
-            id: `${Date.now()}`,
-            author: "system",
-            text: payload.message,
-            sentAt: Date.now(),
-          },
-        ]);
+      if (!isCurrentAttempt(socket, generation)) {
+        return;
       }
-    });
 
-    socket.on("chat:error", (payload: ChatErrorPayload) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "Wait for your turn before sending a message.",
-          sentAt: Date.now(),
-        },
-      ]);
-    });
+      if (terminalSessionRef.current?.sessionId === currentSessionIdRef.current) {
+        socketRef.current = null;
+        socket.removeAllListeners();
+        socket.disconnect();
+        setSessionReady(false);
+        setConnection("idle");
+        return;
+      }
 
-    socket.on("guess:error", (payload: GuessErrorPayload) => {
-      setPendingGuessConfirm(false);
-      setFinalGuessEndsAt(null);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "More messages are required before guessing.",
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("chat");
-    });
-
-    socket.on("round:locked", (payload: { message?: string; guessEndsAt?: number; serverNow?: number }) => {
-      syncServerClock(payload);
-      setPendingGuessConfirm(false);
-      setFinalGuessEndsAt(payload.guessEndsAt || null);
-      setTurnState((current) => ({
-        ...current,
-        currentTurn: "paused",
-        turnEndsAt: null,
-      }));
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "The chat is locked. Make your final read.",
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("identity");
-    });
-
-    socket.on("guess:submitted", () => {
-      setPhase("waitingGuess");
-    });
-
-    socket.on("partner:left", (payload: { message?: string }) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: payload.message || "Your partner disconnected. You can still make your guess.",
-          sentAt: Date.now(),
-        },
-      ]);
-    });
-
-    socket.on("session:ended", finishSessionAsEnded);
-
-    socket.on("session:result", (payload: ResultPayload) => {
-      setNow(getServerNow());
-      recordPersistentScore(payload);
-      setResult(payload);
-      setFinalGuessEndsAt(null);
-      removeActiveSessionId();
-      setPhase("reveal");
-    });
-
-    socket.on(
-      "opponent:guess",
-      (payload: { opponentGuess: ResultPayload["opponentGuess"]; opponentExplanation?: string | null }) => {
-        setResult((current) =>
-          current
-            ? {
-                ...current,
-                opponentGuess: payload.opponentGuess,
-                opponentExplanation: payload.opponentExplanation ?? null,
-                opponentPending: false,
-              }
-            : current,
-        );
-      },
-    );
-
-    socket.on("connect_error", () => {
-      setConnection("offline");
+      clearQueueUiTimers();
+      socketRef.current = null;
+      socket.removeAllListeners();
+      socket.disconnect();
+      forgetCurrentSession();
+      setConnection("idle");
+      setPhase("landing");
     });
   }
 
@@ -740,9 +915,15 @@ function GameApp() {
       return;
     }
 
+    const socket = socketRef.current;
+
+    if (!socket?.connected || currentSessionIdRef.current) {
+      return;
+    }
+
     hiddenAiRequestPendingRef.current = true;
     clearQueueUiTimers();
-    socketRef.current?.emit("queue:test_ai", {
+    socket.emit("queue:test_ai", {
       playerId: playerIdRef.current,
       location: ipLocation,
       modelFamily,
@@ -753,25 +934,91 @@ function GameApp() {
     event.preventDefault();
 
     const text = draft.trim();
+    const socket = socketRef.current;
+    const activeSessionId = currentSessionIdRef.current;
 
-    if (!text || !sessionId || phase !== "chat" || !isPlayerTurn) {
+    if (
+      !text ||
+      !activeSessionId ||
+      phase !== "chat" ||
+      !isPlayerTurn ||
+      !sessionReady ||
+      !socket?.connected ||
+      sendingMessageRef.current
+    ) {
       return;
     }
 
-    setMessages((current) => [
-      ...current,
-      {
-        id: `${Date.now()}`,
-        author: "player",
-        text,
-        sentAt: Date.now(),
-      },
-    ]);
-    socketRef.current?.emit("chat:message", {
-      sessionId,
+    const generation = gameGenerationRef.current;
+    const pendingMessage = pendingMessageRef.current;
+    const clientMessageId = pendingMessage?.sessionId === activeSessionId && pendingMessage.text === text
+      ? pendingMessage.clientMessageId
+      : window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const requestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+
+    pendingMessageRef.current = {
+      sessionId: activeSessionId,
+      clientMessageId,
+      requestId,
       text,
-    });
+    };
+    activeSendRequestRef.current = requestId;
+    sendingMessageRef.current = true;
     setDraft("");
+
+    socket.timeout(4000).emit(
+      "chat:message",
+      {
+        sessionId: activeSessionId,
+        clientMessageId,
+        requestId,
+        text,
+      },
+      (error: unknown, response?: ChatSendAck) => {
+        if (
+          !isCurrentAttempt(socket, generation) ||
+          currentSessionIdRef.current !== activeSessionId ||
+          activeSendRequestRef.current !== requestId
+        ) {
+          return;
+        }
+
+        activeSendRequestRef.current = "";
+        sendingMessageRef.current = false;
+
+        if (error) {
+          if (pendingMessageRef.current?.clientMessageId !== clientMessageId) {
+            return;
+          }
+          setDraft((current) => current || text);
+          appendSystemMessage(activeSessionId, "chat-timeout", "Message not sent. Check your connection and try again.");
+          return;
+        }
+
+        if (!response?.ok) {
+          if (pendingMessageRef.current?.requestId === requestId) {
+            pendingMessageRef.current = null;
+          }
+          setDraft((current) => current || text);
+          appendSystemMessage(
+            activeSessionId,
+            `chat-error:${response?.code || "unknown"}`,
+            response?.error || "Message not sent. Try again.",
+          );
+          return;
+        }
+
+        if (response.sessionId !== activeSessionId || !response.message) {
+          setDraft((current) => current || text);
+          return;
+        }
+
+        if (pendingMessageRef.current?.requestId === requestId) {
+          pendingMessageRef.current = null;
+        }
+        appendMessage(response.message);
+      },
+    );
   }
 
   function chooseIdentity(value: IdentityGuess) {
@@ -792,7 +1039,10 @@ function GameApp() {
   }
 
   function confirmGuessLock() {
-    if (!sessionId || !canGuess) {
+    const socket = socketRef.current;
+    const activeSessionId = currentSessionIdRef.current;
+
+    if (!activeSessionId || !canGuess || !sessionReady || !socket?.connected) {
       return;
     }
 
@@ -807,8 +1057,8 @@ function GameApp() {
     }));
     setPhase("identity");
 
-    socketRef.current?.emit("round:lock", {
-      sessionId,
+    socket.emit("round:lock", {
+      sessionId: activeSessionId,
     });
   }
 
@@ -817,12 +1067,15 @@ function GameApp() {
   }
 
   function submitGuess(nextModelGuess = modelGuess) {
-    if (!identityGuess || !sessionId || finalGuessExpired) {
+    const socket = socketRef.current;
+    const activeSessionId = currentSessionIdRef.current;
+
+    if (!identityGuess || !activeSessionId || finalGuessExpired || !sessionReady || !socket?.connected) {
       return;
     }
 
-    socketRef.current?.emit("guess:submit", {
-      sessionId,
+    socket.emit("guess:submit", {
+      sessionId: activeSessionId,
       identityGuess,
       locationGuess: identityGuess === "Human" ? pin : null,
       modelFamilyGuess: identityGuess === "AI" ? nextModelGuess : null,
@@ -832,13 +1085,18 @@ function GameApp() {
 
   function restart() {
     const socket = socketRef.current;
-    const activeSessionId = sessionId || loadActiveSessionId() || "";
-    const shouldAbortSession =
-      phase === "matching" ||
-      phase === "chat" ||
-      phase === "ended";
+    const activeSessionId = currentSessionIdRef.current || loadActiveSessionId() || "";
+    const shouldAbortSession = phase !== "landing";
 
     clearQueueUiTimers();
+    gameGenerationRef.current += 1;
+    currentSessionIdRef.current = "";
+    locallyEndedSessionRef.current = "";
+    terminalSessionRef.current = null;
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    sendingMessageRef.current = false;
+    setSessionReady(false);
     removeActiveSessionId();
     socketRef.current = null;
 
@@ -896,12 +1154,16 @@ function GameApp() {
   }
 
   function enterChat(payload: SessionCreatedPayload) {
+    currentSessionIdRef.current = payload.sessionId;
+    locallyEndedSessionRef.current = "";
+    terminalSessionRef.current = null;
     setSessionId(payload.sessionId);
+    setSessionReady(true);
     setChatEndsAt(payload.chatEndsAt);
     setNow(getServerNow());
     setMessages((current) => {
       const introMessage: ChatMessage = {
-        id: "intro",
+        id: `intro:${payload.sessionId}`,
         author: "system",
         text: payload.intro,
         sentAt: Date.now(),
@@ -917,15 +1179,44 @@ function GameApp() {
 
   function enterResumedSession(payload: SessionResumedPayload) {
     clearQueueUiTimers();
+    currentSessionIdRef.current = payload.sessionId;
+    locallyEndedSessionRef.current = "";
+    sendingMessageRef.current = false;
+    const pendingMessage = pendingMessageRef.current;
+    const preserveReveal = terminalSessionRef.current?.sessionId === payload.sessionId &&
+      terminalSessionRef.current.phase === "reveal" &&
+      payload.submitted;
+    const pendingWasAccepted = Boolean(
+      pendingMessage?.sessionId === payload.sessionId &&
+      payload.messages.some((message) => message.clientMessageId === pendingMessage.clientMessageId),
+    );
+
+    if (pendingWasAccepted) {
+      pendingMessageRef.current = null;
+    }
+
     setSessionId(payload.sessionId);
+    setSessionReady(true);
     setChatEndsAt(payload.chatEndsAt);
     setNow(getServerNow());
+    setDraft((current) => {
+      if (pendingMessage?.sessionId !== payload.sessionId) {
+        return current;
+      }
+
+      if (pendingWasAccepted) {
+        return current === pendingMessage.text ? "" : current;
+      }
+
+      return current || pendingMessage.text;
+    });
+    setTurnState(EMPTY_TURN_STATE);
     setMessages(
       payload.messages.length
         ? payload.messages
         : [
           {
-            id: "intro",
+            id: `intro:${payload.sessionId}`,
             author: "system",
             text: payload.intro,
             sentAt: Date.now(),
@@ -935,10 +1226,15 @@ function GameApp() {
     setQueueStatus("found");
     setConnectedProfiles(2);
     setFinalGuessEndsAt(payload.finalGuessEndsAt || null);
-    setResult(null);
-    setEndMessage("");
+    if (!preserveReveal) {
+      terminalSessionRef.current = null;
+      setResult(null);
+      setEndMessage("");
+    }
     setPendingGuessConfirm(false);
-    setPhase(payload.chatLocked ? (payload.submitted ? "waitingGuess" : "identity") : "chat");
+    setPhase(preserveReveal
+      ? "reveal"
+      : payload.chatLocked ? (payload.submitted ? "waitingGuess" : "identity") : "chat");
   }
 
   function recordPersistentScore(payload: ResultPayload) {
@@ -1078,9 +1374,9 @@ function GameApp() {
             canGuess={phase === "chat" && canGuess}
             counts={chatCounts}
             draft={draft}
-            endMessage={endMessage || autoAbortMessage}
+            endMessage={endMessage}
             finalGuessSecondsLeft={phase === "reveal" ? 0 : finalGuessSecondsLeft}
-            isEnded={phase === "ended" || Boolean(autoAbortMessage)}
+            isEnded={phase === "ended"}
             isLocked={isFinalGuessPhase || phase === "reveal"}
             isPlayerTurn={phase === "chat" && isPlayerTurn}
             lockedMessage={

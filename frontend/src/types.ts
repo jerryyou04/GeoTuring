@@ -9,6 +9,7 @@ export interface ServerClockPayload {
 
 export interface ChatMessage {
   id: string;
+  clientMessageId?: string;
   author: "player" | "partner" | "system";
   text: string;
   sentAt: number;
@@ -42,12 +43,25 @@ export interface QueueErrorPayload {
 }
 
 export interface ChatErrorPayload {
+  sessionId?: string;
+  clientMessageId?: string;
+  requestId?: string;
   code?: string;
   message?: string;
   retryAt?: number;
 }
 
+export interface ChatSendAck {
+  ok: boolean;
+  sessionId?: string;
+  requestId?: string;
+  message?: ChatMessage;
+  code?: string;
+  error?: string;
+}
+
 export interface GuessErrorPayload {
+  sessionId?: string;
   code?: string;
   message?: string;
   counts?: MessageCounts;

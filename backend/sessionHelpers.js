@@ -20,12 +20,19 @@ function buildSessionResumePayload(session, socketId) {
 }
 
 function serializeMessagesForSocket(session, socketId) {
-  return session.messages.map((message, index) => ({
-    id: `${session.id}:${index}`,
-    author: getClientMessageAuthor(session, socketId, message.author),
-    text: message.text,
-    sentAt: message.sentAt,
-  }));
+  return session.messages.map((message, index) => {
+    const author = getClientMessageAuthor(session, socketId, message.author);
+
+    return {
+      id: message.id || `${session.id}:${index}`,
+      ...(author === "player" && message.clientMessageId
+        ? { clientMessageId: message.clientMessageId }
+        : {}),
+      author,
+      text: message.text,
+      sentAt: message.sentAt,
+    };
+  });
 }
 
 function getClientMessageAuthor(session, socketId, author) {
@@ -46,10 +53,11 @@ function isSocketInSession(session, socketId) {
   }
 
   if (session.mode === "human") {
-    return Boolean(session.players[socketId]);
+    const player = session.players[socketId];
+    return Boolean(player && !player.disconnected && !player.abandoned);
   }
 
-  return session.playerSocketId === socketId;
+  return session.playerSocketId === socketId && !session.disconnected && !session.abandoned;
 }
 
 function getMessageCounts(session) {

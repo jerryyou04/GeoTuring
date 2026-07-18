@@ -76,6 +76,7 @@ app.use(express.json());
 const io = new Server(server, {
   cors: corsOptions,
 });
+const COMPLETED_SESSION_RETENTION_MS = 30_000;
 
 app.get("/", (req, res) => {
   res.json({
@@ -383,7 +384,8 @@ function buildAiOpponentRecord(session) {
 
 // Emit the human's result for an AI game, attaching the AI's read of them. If the
 // AI's guess is still in flight, send it as pending and fill it in via a late
-// opponent:guess event — mirroring the human-vs-human flow. Persists + deletes once.
+// opponent:guess event — mirroring the human-vs-human flow. The completed
+// result is retained briefly so a dropped result packet can be recovered.
 function finalizeAiSession(session) {
   if (session.aiFinalized) {
     return;
@@ -397,16 +399,8 @@ function finalizeAiSession(session) {
   }
 
   const pending = session.aiGuess === null; // still in flight
-  const resolved = session.aiGuess && !session.aiGuess.failed ? session.aiGuess : null;
 
-  io.to(session.playerSocketId).emit("session:result", {
-    ...session.result,
-    opponentActual: revealHumanLocation(session.playerLocation || {}),
-    opponentGuessEndsAt: session.finalGuessEndsAt || null,
-    opponentGuess: resolved ? revealSubmittedGuess(resolved.guess) : null,
-    opponentExplanation: resolved ? resolved.explanation : null,
-    opponentPending: pending,
-  });
+  io.to(session.playerSocketId).emit("session:result", buildAiPlayerResultPayload(session));
 
   if (!pending || !session.aiGuessPromise) {
     completeAiSession(session);
@@ -420,6 +414,24 @@ function finalizeAiSession(session) {
       emitAiGuessFill(session);
       completeAiSession(session);
     });
+}
+
+function buildAiPlayerResultPayload(session) {
+  if (!session.aiGuessStarted) {
+    return session.result;
+  }
+
+  const pending = session.aiGuess === null;
+  const resolved = session.aiGuess && !session.aiGuess.failed ? session.aiGuess : null;
+
+  return {
+    ...session.result,
+    opponentActual: revealHumanLocation(session.playerLocation || {}),
+    opponentGuessEndsAt: session.finalGuessEndsAt || null,
+    opponentGuess: resolved ? revealSubmittedGuess(resolved.guess) : null,
+    opponentExplanation: resolved ? resolved.explanation : null,
+    opponentPending: pending,
+  };
 }
 
 function emitAiGuessFill(session) {
@@ -444,7 +456,13 @@ function completeAiSession(session) {
     buildStoredTranscript(session, session.playerSocketId),
     buildAiOpponentRecord(session),
   );
-  deleteSession(session.id);
+
+  if (session.abandoned) {
+    deleteSession(session.id);
+    return;
+  }
+
+  retainCompletedSession(session);
 }
 
 const sessions = new Map();
@@ -481,6 +499,7 @@ function createHumanSession(first, second) {
     turnEndsAt: null,
     turnTimer: null,
     startTurnTimer: null,
+    startTurnOwner: null,
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
@@ -541,6 +560,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     turnEndsAt: null,
     turnTimer: null,
     startTurnTimer: null,
+    startTurnOwner: null,
     chatTimer: null,
     finalGuessEndsAt: null,
     finalGuessTimer: null,
@@ -600,33 +620,128 @@ function hasTurnExpired(session, now = Date.now()) {
   return session.turnEndsAt !== null && now >= session.turnEndsAt;
 }
 
-function handleChatMessage(socket, payload = {}) {
-  const session = sessions.get(payload.sessionId);
+function emitChatError(socket, sessionId, acknowledge, code, message, clientMessageId = "", requestId = "") {
+  const errorPayload = { sessionId, clientMessageId, requestId, code, message };
+  socket.emit("chat:error", errorPayload);
 
-  if (!isSocketInSession(session, socket.id) || session.ended || session.chatLocked) {
-    return;
+  if (typeof acknowledge === "function") {
+    acknowledge({
+      ok: false,
+      sessionId,
+      clientMessageId,
+      requestId,
+      code,
+      error: message,
+    });
   }
+}
 
-  if (Date.now() >= session.chatEndsAt) {
-    handleChatExpired(session.id);
+function handleChatMessage(socket, payload = {}, acknowledge) {
+  const requestedSessionId = String(payload.sessionId || "");
+  const clientMessageId = String(payload.clientMessageId || "").trim().slice(0, 100);
+  const requestId = String(payload.requestId || "").trim().slice(0, 100);
+  const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
+
+  if (!isSocketInSession(session, socket.id)) {
+    emitChatError(
+      socket,
+      requestedSessionId,
+      acknowledge,
+      "session_unavailable",
+      "This chat is no longer active.",
+      clientMessageId,
+      requestId,
+    );
     return;
   }
 
   const text = String(payload.text || "").trim().slice(0, 400);
 
-  if (!text) {
+  if (!text || !clientMessageId) {
+    emitChatError(
+      socket,
+      session.id,
+      acknowledge,
+      "invalid_message",
+      "Enter a message before sending.",
+      clientMessageId,
+      requestId,
+    );
+    return;
+  }
+
+  const existingMessage = session.messages.find((message) => (
+    message.author === socket.id && message.clientMessageId === clientMessageId
+  ));
+
+  if (existingMessage) {
+    if (typeof acknowledge === "function") {
+      acknowledge({
+        ok: true,
+        sessionId: session.id,
+        requestId,
+        message: {
+          id: existingMessage.id,
+          clientMessageId: existingMessage.clientMessageId,
+          author: "player",
+          text: existingMessage.text,
+          sentAt: existingMessage.sentAt,
+        },
+      });
+    }
+    return;
+  }
+
+  if (session.ended || session.chatLocked) {
+    emitChatError(
+      socket,
+      session.id,
+      acknowledge,
+      "session_unavailable",
+      "This chat is no longer active.",
+      clientMessageId,
+      requestId,
+    );
+    return;
+  }
+
+  if (Date.now() >= session.chatEndsAt) {
+    emitChatError(
+      socket,
+      session.id,
+      acknowledge,
+      "round_expired",
+      "The round timer has expired.",
+      clientMessageId,
+      requestId,
+    );
+    handleChatExpired(session.id);
     return;
   }
 
   if (session.turnOwner !== socket.id) {
-    socket.emit("chat:error", {
-      code: "not_your_turn",
-      message: "Wait for your turn before sending a message.",
-    });
+    emitChatError(
+      socket,
+      session.id,
+      acknowledge,
+      "not_your_turn",
+      "Wait for your turn before sending a message.",
+      clientMessageId,
+      requestId,
+    );
     return;
   }
 
   if (hasTurnExpired(session)) {
+    emitChatError(
+      socket,
+      session.id,
+      acknowledge,
+      "turn_expired",
+      "Your turn timer has expired.",
+      clientMessageId,
+      requestId,
+    );
     handleTurnTimeout(session.id, socket.id);
     return;
   }
@@ -634,11 +749,29 @@ function handleChatMessage(socket, payload = {}) {
   clearTurnTimer(session);
   session.timeout = null;
 
-  session.messages.push({
+  const message = {
+    id: cryptoRandomId(),
+    clientMessageId,
     author: socket.id,
     text,
     sentAt: Date.now(),
-  });
+  };
+  session.messages.push(message);
+
+  if (typeof acknowledge === "function") {
+    acknowledge({
+      ok: true,
+      sessionId: session.id,
+      requestId,
+      message: {
+        id: message.id,
+        clientMessageId: message.clientMessageId,
+        author: "player",
+        text: message.text,
+        sentAt: message.sentAt,
+      },
+    });
+  }
 
   if (session.mode === "human") {
     const partnerSocketId = getHumanPartnerSocketId(session, socket.id);
@@ -650,10 +783,10 @@ function handleChatMessage(socket, payload = {}) {
     socket.to(partnerSocketId).emit("partner:message", {
       sessionId: session.id,
       message: {
-        id: cryptoRandomId(),
+        id: message.id,
         author: "partner",
-        text,
-        sentAt: Date.now(),
+        text: message.text,
+        sentAt: message.sentAt,
       },
     });
     startTurn(session, partnerSocketId);
@@ -677,12 +810,13 @@ function handleChatMessage(socket, payload = {}) {
 function handleGuessSubmit(socket, payload = {}) {
   const session = sessions.get(payload.sessionId);
 
-  if (!isSocketInSession(session, socket.id) || session.ended) {
+  if (!isSocketInSession(session, socket.id) || session.ended || session.completed) {
     return;
   }
 
   if (!session.chatLocked) {
     socket.emit("guess:error", {
+      sessionId: session.id,
       code: "not_ready",
       message: "Lock the round before submitting a final guess.",
       counts: getPersonalMessageCounts(session, socket.id),
@@ -724,7 +858,7 @@ function handleGuessSubmit(socket, payload = {}) {
     if (areHumanFinalGuessesDone(session)) {
       clearFinalGuessTimer(session);
       persistHumanGameHistory(session);
-      deleteSession(session.id);
+      retainCompletedSession(session);
     }
 
     return;
@@ -759,6 +893,7 @@ function handleRoundLock(socket, payload = {}) {
 
   if (!isGuessReady(session)) {
     socket.emit("guess:error", {
+      sessionId: session.id,
       code: "not_ready",
       message: `At least ${MIN_MESSAGES_PER_SIDE} messages from each side are required before guessing.`,
       counts: getPersonalMessageCounts(session, socket.id),
@@ -884,8 +1019,10 @@ async function typeAndEmitSignoff(session, text) {
 
 function emitAiPartnerMessage(session, text) {
   const sentAt = Date.now();
+  const messageId = cryptoRandomId();
 
   session.messages.push({
+    id: messageId,
     author: "partner",
     text,
     sentAt,
@@ -900,7 +1037,7 @@ function emitAiPartnerMessage(session, text) {
   io.to(session.playerSocketId).emit("partner:message", {
     sessionId: session.id,
     message: {
-      id: cryptoRandomId(),
+      id: messageId,
       author: "partner",
       text,
       sentAt,
@@ -913,13 +1050,14 @@ function findSessionByPlayerId(playerId, preferredSessionId = "") {
     return null;
   }
 
-  const preferredSession = preferredSessionId ? sessions.get(preferredSessionId) : null;
-
-  if (isPlayerInSession(preferredSession, playerId)) {
-    return preferredSession;
+  if (preferredSessionId) {
+    const preferredSession = sessions.get(preferredSessionId);
+    return isPlayerInSession(preferredSession, playerId) ? preferredSession : null;
   }
 
-  return [...sessions.values()].find((session) => isPlayerInSession(session, playerId) && !session.ended) || null;
+  return [...sessions.values()]
+    .filter((session) => isPlayerInSession(session, playerId))
+    .sort((first, second) => second.createdAt - first.createdAt)[0] || null;
 }
 
 function isPlayerInSession(session, playerId) {
@@ -928,10 +1066,16 @@ function isPlayerInSession(session, playerId) {
   }
 
   if (session.mode === "human") {
-    return Object.values(session.players).some((player) => player.playerId === playerId);
+    return Object.values(session.players).some((player) => player.playerId === playerId && !player.abandoned);
   }
 
-  return session.playerId === playerId;
+  return session.playerId === playerId && !session.abandoned;
+}
+
+function deleteSocketSessionMapping(socketId, sessionId) {
+  if (socketSessions.get(socketId) === sessionId) {
+    socketSessions.delete(socketId);
+  }
 }
 
 function resumeSession(socket, payload = {}) {
@@ -941,6 +1085,15 @@ function resumeSession(socket, payload = {}) {
   if (!session) {
     socket.emit("session:resume_failed", {
       reason: "not_found",
+    });
+    return;
+  }
+
+  const mappedSessionId = socketSessions.get(socket.id);
+
+  if (mappedSessionId && mappedSessionId !== session.id) {
+    socket.emit("session:resume_failed", {
+      reason: "socket_in_use",
     });
     return;
   }
@@ -980,6 +1133,8 @@ function resumeSession(socket, payload = {}) {
     if (resumedPlayer && resumedPlayer.submitted && resumedPlayer.result) {
       emitHumanPlayerResult(session, socket.id);
     }
+  } else if (session.submitted && session.result) {
+    io.to(socket.id).emit("session:result", buildAiPlayerResultPayload(session));
   }
 }
 
@@ -997,21 +1152,34 @@ function reattachSessionSocket(session, playerId, socket) {
         message.author = socket.id;
       }
     });
-    io.sockets.sockets.get(oldSocketId)?.leave(session.id);
+    const oldSocket = io.sockets.sockets.get(oldSocketId);
     delete session.players[oldSocketId];
-    socketSessions.delete(oldSocketId);
+    deleteSocketSessionMapping(oldSocketId, session.id);
     session.players[socket.id] = {
       ...player,
       socketId: socket.id,
       disconnected: false,
+      abandoned: false,
     };
 
     if (session.turnOwner === oldSocketId) {
       session.turnOwner = socket.id;
+      armTurnTimer(session);
+    }
+
+    if (session.startTurnOwner === oldSocketId) {
+      session.startTurnOwner = socket.id;
     }
 
     if (session.timeout?.canActSocketId === oldSocketId) {
       session.timeout.canActSocketId = socket.id;
+    }
+
+    if (oldSocketId !== socket.id && oldSocket?.connected) {
+      oldSocket.emit("session:superseded", { sessionId: session.id });
+      oldSocket.disconnect(true);
+    } else if (oldSocketId !== socket.id) {
+      oldSocket?.leave(session.id);
     }
 
     return socket.id;
@@ -1022,11 +1190,17 @@ function reattachSessionSocket(session, playerId, socket) {
   }
 
   const oldSocketId = session.playerSocketId;
-  io.sockets.sockets.get(oldSocketId)?.leave(session.id);
-  socketSessions.delete(oldSocketId);
+  const oldSocket = io.sockets.sockets.get(oldSocketId);
+
+  deleteSocketSessionMapping(oldSocketId, session.id);
 
   if (session.turnOwner === oldSocketId) {
     session.turnOwner = socket.id;
+    armTurnTimer(session);
+  }
+
+  if (session.startTurnOwner === oldSocketId) {
+    session.startTurnOwner = socket.id;
   }
 
   session.messages.forEach((message) => {
@@ -1037,6 +1211,14 @@ function reattachSessionSocket(session, playerId, socket) {
 
   session.playerSocketId = socket.id;
   session.disconnected = false;
+  session.abandoned = false;
+
+  if (oldSocketId !== socket.id && oldSocket?.connected) {
+    oldSocket.emit("session:superseded", { sessionId: session.id });
+    oldSocket.disconnect(true);
+  } else if (oldSocketId !== socket.id) {
+    oldSocket?.leave(session.id);
+  }
   return socket.id;
 }
 
@@ -1045,12 +1227,30 @@ function scheduleInitialTurn(session, owner) {
     clearTimeout(session.startTurnTimer);
   }
 
+  session.startTurnOwner = owner;
   const delay = Math.max(0, (session.chatStartsAt || Date.now()) - Date.now());
 
   session.startTurnTimer = setTimeout(() => {
     session.startTurnTimer = null;
-    startTurn(session, owner);
+    const nextOwner = session.startTurnOwner;
+    session.startTurnOwner = null;
+
+    if (nextOwner) {
+      startTurn(session, nextOwner);
+    }
   }, delay);
+}
+
+function armTurnTimer(session) {
+  clearTurnTimer(session);
+
+  if (!session.turnOwner || !session.turnEndsAt || session.ended || session.chatLocked) {
+    return;
+  }
+
+  const owner = session.turnOwner;
+  const turnDelay = Math.max(0, session.turnEndsAt - Date.now());
+  session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), turnDelay);
 }
 
 function startTurn(session, owner) {
@@ -1068,10 +1268,9 @@ function startTurn(session, owner) {
   session.turnOwner = owner;
   session.turnEndsAt = Math.min(Date.now() + TURN_MS, session.chatEndsAt);
   emitTurnState(session);
-  const turnDelay = Math.max(0, session.turnEndsAt - Date.now());
+  armTurnTimer(session);
 
   if (owner === "partner" && session.mode === "ai") {
-    session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), turnDelay);
     sendAiTurnMessage(session.id).catch((error) => {
       console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
       markAiResponseStatus(session, {
@@ -1081,8 +1280,6 @@ function startTurn(session, owner) {
     });
     return;
   }
-
-  session.turnTimer = setTimeout(() => handleTurnTimeout(session.id, owner), turnDelay);
 }
 
 async function sendAiTurnMessage(sessionId) {
@@ -1223,6 +1420,7 @@ async function sendAiTurnMessage(sessionId) {
   };
 
   session.messages.push({
+    id: message.id,
     author: "partner",
     text: replyResult.text,
     sentAt: message.sentAt,
@@ -1360,7 +1558,7 @@ function startFinalGuessTimer(session) {
 function finalizeMissingGuesses(sessionId) {
   const session = sessions.get(sessionId);
 
-  if (!session || session.ended || !session.chatLocked) {
+  if (!session || session.ended || session.completed || !session.chatLocked) {
     return;
   }
 
@@ -1385,7 +1583,7 @@ function finalizeMissingGuesses(sessionId) {
 
     clearFinalGuessTimer(session);
     persistHumanGameHistory(session);
-    deleteSession(session.id);
+    retainCompletedSession(session);
     return;
   }
 
@@ -1482,17 +1680,34 @@ function endAbortedSession(session, excludedSocketId = null) {
 }
 
 function detachPlayerSocket(session, socketId) {
-  socketSessions.delete(socketId);
+  deleteSocketSessionMapping(socketId, session.id);
   io.sockets.sockets.get(socketId)?.leave(session.id);
 
   if (session.mode === "human" && session.players[socketId]) {
     session.players[socketId].disconnected = true;
+    session.players[socketId].abandoned = true;
   } else if (session.mode === "ai") {
     session.disconnected = true;
+    session.abandoned = true;
   }
 }
 
-function abandonSessionForQueue(session, playerId) {
+function supersedeAbandonedSocket(sessionId, playerSocketId, replacementSocketId) {
+  if (!replacementSocketId || replacementSocketId === playerSocketId) {
+    return;
+  }
+
+  const oldSocket = io.sockets.sockets.get(playerSocketId);
+
+  if (!oldSocket?.connected) {
+    return;
+  }
+
+  oldSocket.emit("session:superseded", { sessionId });
+  oldSocket.disconnect(true);
+}
+
+function abandonSessionForQueue(session, playerId, replacementSocketId = null) {
   if (!session || session.ended) {
     return;
   }
@@ -1507,8 +1722,24 @@ function abandonSessionForQueue(session, playerId) {
     return;
   }
 
+  const sessionId = session.id;
+  const finishAbandonment = () => {
+    supersedeAbandonedSocket(sessionId, playerSocketId, replacementSocketId);
+
+    if (!replacementSocketId) {
+      return;
+    }
+
+    const remainingSession = findSessionByPlayerId(playerId);
+
+    if (remainingSession && remainingSession.id !== sessionId) {
+      abandonSessionForQueue(remainingSession, playerId, replacementSocketId);
+    }
+  };
+
   if (!session.chatLocked) {
     endAbortedSession(session, playerSocketId);
+    finishAbandonment();
     return;
   }
 
@@ -1516,10 +1747,15 @@ function abandonSessionForQueue(session, playerId) {
   // Leaving counts as no guess; an already-submitted player is simply detached.
   if (session.mode === "ai") {
     if (session.submitted) {
-      detachPlayerSocket(session, playerSocketId);
+      if (session.aiFinalized) {
+        deleteSession(session.id);
+      } else {
+        detachPlayerSocket(session, playerSocketId);
+      }
     } else {
       deleteSession(session.id);
     }
+    finishAbandonment();
     return;
   }
 
@@ -1541,28 +1777,44 @@ function abandonSessionForQueue(session, playerId) {
   if (areHumanFinalGuessesDone(session)) {
     clearFinalGuessTimer(session);
     persistHumanGameHistory(session);
-    deleteSession(session.id);
+    detachPlayerSocket(session, playerSocketId);
+
+    if (Object.values(session.players).every((candidate) => candidate.abandoned)) {
+      deleteSession(session.id);
+    } else {
+      retainCompletedSession(session);
+    }
+    finishAbandonment();
     return;
   }
 
   detachPlayerSocket(session, playerSocketId);
+  finishAbandonment();
 }
 
 function handleSessionAbort(socket, payload = {}, acknowledge) {
+  const wasQueued = waitingQueue.has(socket.id);
+  queueService.removeFromQueue(socket.id);
+
   const mappedSessionId = socketSessions.get(socket.id);
   const requestedSessionId = String(payload.sessionId || mappedSessionId || "");
   const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
 
   if (!session || !isSocketInSession(session, socket.id)) {
     if (typeof acknowledge === "function") {
-      acknowledge({ ok: false });
+      acknowledge({ ok: wasQueued });
     }
     return;
   }
 
   if (session.chatLocked) {
+    const abortingPlayerId = session.mode === "human"
+      ? session.players[socket.id]?.playerId
+      : session.playerId;
+    abandonSessionForQueue(session, abortingPlayerId);
+
     if (typeof acknowledge === "function") {
-      acknowledge({ ok: false, reason: "round_locked" });
+      acknowledge({ ok: true });
     }
     return;
   }
@@ -1630,12 +1882,16 @@ function handleDisconnect(socket) {
     session.disconnected = true;
   }
 
-  socketSessions.delete(socket.id);
+  deleteSocketSessionMapping(socket.id, session.id);
   cleanupSessionIfDone(session);
 }
 
 function cleanupSessionIfDone(session) {
   if (!sessions.has(session.id)) {
+    return;
+  }
+
+  if (session.completed) {
     return;
   }
 
@@ -1646,11 +1902,37 @@ function cleanupSessionIfDone(session) {
     if (!done) {
       return;
     }
-  } else if (!session.submitted) {
+  } else if (!session.submitted || (session.aiGuessStarted && !session.aiFinalized)) {
     return;
   }
 
   deleteSession(session.id);
+}
+
+function retainCompletedSession(session) {
+  if (!sessions.has(session.id) || session.completed) {
+    return;
+  }
+
+  session.completed = true;
+
+  if (session.expireTimer) {
+    clearTimeout(session.expireTimer);
+  }
+  if (session.startTurnTimer) {
+    clearTimeout(session.startTurnTimer);
+    session.startTurnTimer = null;
+  }
+  session.startTurnOwner = null;
+  if (session.chatTimer) {
+    clearTimeout(session.chatTimer);
+    session.chatTimer = null;
+  }
+  clearTurnTimer(session);
+  clearFinalGuessTimer(session);
+  clearAiLockTimer(session);
+
+  session.expireTimer = setTimeout(() => deleteSession(session.id), COMPLETED_SESSION_RETENTION_MS);
 }
 
 function deleteSession(sessionId) {
@@ -1667,6 +1949,7 @@ function deleteSession(sessionId) {
     clearTimeout(session.startTurnTimer);
     session.startTurnTimer = null;
   }
+  session.startTurnOwner = null;
   if (session.chatTimer) {
     clearTimeout(session.chatTimer);
   }
@@ -1675,9 +1958,9 @@ function deleteSession(sessionId) {
   clearAiLockTimer(session);
 
   if (session.mode === "human") {
-    Object.keys(session.players).forEach((socketId) => socketSessions.delete(socketId));
+    Object.keys(session.players).forEach((socketId) => deleteSocketSessionMapping(socketId, session.id));
   } else {
-    socketSessions.delete(session.playerSocketId);
+    deleteSocketSessionMapping(session.playerSocketId, session.id);
   }
 
   sessions.delete(sessionId);
@@ -1706,7 +1989,7 @@ io.on("connection", (socket) => {
       acknowledge({ serverNow: Date.now() });
     }
   });
-  socket.on("chat:message", (payload = {}) => handleChatMessage(socket, payload));
+  socket.on("chat:message", (payload = {}, acknowledge) => handleChatMessage(socket, payload, acknowledge));
   socket.on("round:lock", (payload = {}) => handleRoundLock(socket, payload));
   socket.on("guess:submit", (payload = {}) => handleGuessSubmit(socket, payload));
   socket.on("disconnect", () => handleDisconnect(socket));

@@ -16,8 +16,12 @@ function createQueueService({
   createHumanSession,
   findSessionByPlayerId,
   resumeSession,
-  abandonSession,
+  abandonSessionForQueue,
 }) {
+  if (typeof abandonSessionForQueue !== "function") {
+    throw new TypeError("createQueueService requires abandonSessionForQueue");
+  }
+
   function addToQueue(socket, payload = {}) {
     if (socketSessions.has(socket.id)) {
       return;
@@ -30,16 +34,23 @@ function createQueueService({
 
     // A stored session id means reconnect. No id means the player explicitly
     // asked for a new game, so release any old server session before queueing.
-    if (resumableSession && requestedSessionId) {
+    if (requestedSessionId) {
+      if (resumableSession?.id !== requestedSessionId) {
+        socket.emit("session:resume_failed", {
+          reason: "not_found",
+        });
+        return;
+      }
+
       resumeSession(socket, {
         playerId,
-        sessionId: resumableSession.id,
+        sessionId: requestedSessionId,
       });
       return;
     }
 
     if (resumableSession) {
-      abandonSession(resumableSession, playerId);
+      abandonSessionForQueue(resumableSession, playerId, socket.id);
     }
 
     if (waitingQueue.has(socket.id)) {
@@ -89,10 +100,11 @@ function createQueueService({
       return;
     }
 
-    const queueEntry = waitingQueue.get(socket.id);
-    removeFromQueue(socket.id);
-
     const playerId = sanitizePlayerId(payload.playerId);
+    const queueEntry = waitingQueue.get(socket.id) ||
+      [...waitingQueue.values()].find((entry) => entry.playerId === playerId);
+    removeQueuedPlayer(playerId);
+
     const location = sanitizeLocation(payload.location);
     socket.data.playerId = playerId;
 
@@ -102,6 +114,12 @@ function createQueueService({
         message: "A valid rough IP location is required for AI testing.",
       });
       return;
+    }
+
+    const existingSession = findSessionByPlayerId(playerId);
+
+    if (existingSession) {
+      abandonSessionForQueue(existingSession, playerId, socket.id);
     }
 
     createAiSession(socket, location, payload.modelFamily, queueEntry?.queuedAt || Date.now());
