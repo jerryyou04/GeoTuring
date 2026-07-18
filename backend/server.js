@@ -457,6 +457,7 @@ const queueService = createQueueService({
   createHumanSession,
   findSessionByPlayerId,
   resumeSession,
+  abandonSessionForQueue,
 });
 registerAdminRoutes(app, { sessions, waitingQueue, db });
 
@@ -1447,9 +1448,13 @@ function clearFinalGuessTimer(session) {
   }
 }
 
-function emitSessionEnded(session, message) {
+function emitSessionEnded(session, message, excludedSocketId = null) {
   if (session.mode === "human") {
     Object.keys(session.players).forEach((socketId) => {
+      if (socketId === excludedSocketId) {
+        return;
+      }
+
       io.to(socketId).emit("session:ended", {
         sessionId: session.id,
         serverNow: Date.now(),
@@ -1459,11 +1464,114 @@ function emitSessionEnded(session, message) {
     return;
   }
 
+  if (session.playerSocketId === excludedSocketId) {
+    return;
+  }
+
   io.to(session.playerSocketId).emit("session:ended", {
     sessionId: session.id,
     serverNow: Date.now(),
     message,
   });
+}
+
+function endAbortedSession(session, excludedSocketId = null) {
+  session.ended = true;
+  emitSessionEnded(session, "The round ended because your partner left.", excludedSocketId);
+  deleteSession(session.id);
+}
+
+function detachPlayerSocket(session, socketId) {
+  socketSessions.delete(socketId);
+  io.sockets.sockets.get(socketId)?.leave(session.id);
+
+  if (session.mode === "human" && session.players[socketId]) {
+    session.players[socketId].disconnected = true;
+  } else if (session.mode === "ai") {
+    session.disconnected = true;
+  }
+}
+
+function abandonSessionForQueue(session, playerId) {
+  if (!session || session.ended) {
+    return;
+  }
+
+  const playerSocketId = session.mode === "human"
+    ? Object.keys(session.players).find((socketId) => session.players[socketId].playerId === playerId)
+    : session.playerId === playerId
+      ? session.playerSocketId
+      : null;
+
+  if (!playerSocketId) {
+    return;
+  }
+
+  if (!session.chatLocked) {
+    endAbortedSession(session, playerSocketId);
+    return;
+  }
+
+  // Once final guesses have opened, preserve the other player's result flow.
+  // Leaving counts as no guess; an already-submitted player is simply detached.
+  if (session.mode === "ai") {
+    if (session.submitted) {
+      detachPlayerSocket(session, playerSocketId);
+    } else {
+      deleteSession(session.id);
+    }
+    return;
+  }
+
+  const player = session.players[playerSocketId];
+
+  if (!player.submitted) {
+    player.guess = createNoGuess();
+    player.result = scoreHumanGuess(session, playerSocketId, player.guess);
+    player.submitted = true;
+
+    const partnerSocketId = getHumanPartnerSocketId(session, playerSocketId);
+    const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+
+    if (partnerSocketId && partner?.submitted) {
+      emitOpponentGuessFill(session, partnerSocketId);
+    }
+  }
+
+  if (areHumanFinalGuessesDone(session)) {
+    clearFinalGuessTimer(session);
+    persistHumanGameHistory(session);
+    deleteSession(session.id);
+    return;
+  }
+
+  detachPlayerSocket(session, playerSocketId);
+}
+
+function handleSessionAbort(socket, payload = {}, acknowledge) {
+  const mappedSessionId = socketSessions.get(socket.id);
+  const requestedSessionId = String(payload.sessionId || mappedSessionId || "");
+  const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
+
+  if (!session || !isSocketInSession(session, socket.id)) {
+    if (typeof acknowledge === "function") {
+      acknowledge({ ok: false });
+    }
+    return;
+  }
+
+  if (session.chatLocked) {
+    if (typeof acknowledge === "function") {
+      acknowledge({ ok: false, reason: "round_locked" });
+    }
+    return;
+  }
+
+  endAbortedSession(session, socket.id);
+
+  if (typeof acknowledge === "function") {
+    acknowledge({ ok: true });
+  }
 }
 
 function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The chat is locked. Make your final read.") {
@@ -1592,6 +1700,7 @@ io.on("connection", (socket) => {
   socket.on("queue:test_ai", (payload = {}) => queueService.createRequestedAiSession(socket, payload));
   socket.on("queue:leave", () => queueService.removeFromQueue(socket.id));
   socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
+  socket.on("session:abort", (payload = {}, acknowledge) => handleSessionAbort(socket, payload, acknowledge));
   socket.on("clock:sync", (payload = {}, acknowledge) => {
     if (typeof acknowledge === "function") {
       acknowledge({ serverNow: Date.now() });

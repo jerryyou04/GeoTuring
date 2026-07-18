@@ -16,6 +16,7 @@ function createQueueService({
   createHumanSession,
   findSessionByPlayerId,
   resumeSession,
+  abandonSession,
 }) {
   function addToQueue(socket, payload = {}) {
     if (socketSessions.has(socket.id)) {
@@ -24,14 +25,21 @@ function createQueueService({
 
     const playerId = sanitizePlayerId(payload.playerId);
     socket.data.playerId = playerId;
-    const resumableSession = findSessionByPlayerId(playerId, payload.sessionId);
+    const requestedSessionId = String(payload.sessionId || "").trim();
+    const resumableSession = findSessionByPlayerId(playerId, requestedSessionId);
 
-    if (resumableSession) {
+    // A stored session id means reconnect. No id means the player explicitly
+    // asked for a new game, so release any old server session before queueing.
+    if (resumableSession && requestedSessionId) {
       resumeSession(socket, {
         playerId,
         sessionId: resumableSession.id,
       });
       return;
+    }
+
+    if (resumableSession) {
+      abandonSession(resumableSession, playerId);
     }
 
     if (waitingQueue.has(socket.id)) {

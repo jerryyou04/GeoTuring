@@ -148,16 +148,26 @@ function GameApp() {
   }, [now, queueFrozenSeconds, queueStartedAt, queueStatus]);
 
   const chatCounts = turnState.counts || getVisibleMessageCounts(messages);
+  const hasRequiredMessages =
+    chatCounts.player >= MIN_MESSAGES_PER_SIDE &&
+    chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
   const canGuess =
     !chatTimerExpired &&
     !turnTimerExpired &&
-    chatCounts.player >= MIN_MESSAGES_PER_SIDE &&
-    chatCounts.partner >= MIN_MESSAGES_PER_SIDE;
+    hasRequiredMessages;
   const isPlayerTurn =
     phase === "chat" &&
     turnState.currentTurn === "player" &&
     !chatTimerExpired &&
     !turnTimerExpired;
+  // Render true early timeouts as ended immediately, but keep the stored session
+  // until the server confirms. A last-moment accepted message can still advance
+  // the turn instead of aborting the round.
+  const autoAbortMessage = !hasRequiredMessages && chatTimerExpired
+    ? "The round ended because time ran out before enough messages were exchanged."
+    : !hasRequiredMessages && turnTimerExpired
+      ? "The round auto-aborted because the turn timer expired before enough messages were exchanged."
+      : "";
   const isFinalGuessPhase = phase === "identity" || phase === "humanGuess" || phase === "aiGuess" || phase === "waitingGuess";
   const finalGuessExpired = isFinalGuessPhase && finalGuessEndsAt !== null && finalGuessEndsAt <= now;
   const turnSecondsLeft = turnState.turnEndsAt !== null
@@ -325,6 +335,39 @@ function GameApp() {
     setQueueFrozenSeconds((current) => current ?? Math.max(0, Math.floor((foundAt - queuedAt) / 1000)));
   }
 
+  function finishSessionAsEnded(payload: { sessionId?: string; message?: string; serverNow?: number } = {}) {
+    if (Number.isFinite(payload.serverNow)) {
+      syncServerClock(payload);
+    }
+
+    clearQueueUiTimers();
+    removeActiveSessionId();
+    const message = payload.message || "This round ended.";
+    const endedSessionId = payload.sessionId || sessionId || "current";
+    const messageId = `session-ended:${endedSessionId}`;
+
+    setEndMessage(message);
+    setPendingGuessConfirm(false);
+    setFinalGuessEndsAt(null);
+    setTurnState((current) => ({
+      ...current,
+      currentTurn: "paused",
+      turnEndsAt: null,
+    }));
+    setMessages((current) => current.some((item) => item.id === messageId)
+      ? current
+      : [
+          ...current,
+          {
+            id: messageId,
+            author: "system",
+            text: message,
+            sentAt: Date.now(),
+          },
+        ]);
+    setPhase("ended");
+  }
+
   function resumeActiveSession(activeSessionId: string) {
     clearQueueUiTimers();
     setConnection("connecting");
@@ -446,27 +489,7 @@ function GameApp() {
       ]);
     });
 
-    socket.on("session:ended", (payload: { message?: string; serverNow?: number }) => {
-      syncServerClock(payload);
-      removeActiveSessionId();
-      const message = payload.message || "This round ended.";
-      setEndMessage(message);
-      setTurnState((current) => ({
-        ...current,
-        currentTurn: "paused",
-        turnEndsAt: null,
-      }));
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: message,
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("ended");
-    });
+    socket.on("session:ended", finishSessionAsEnded);
 
     socket.on("session:result", (payload: ResultPayload) => {
       setNow(getServerNow());
@@ -675,27 +698,7 @@ function GameApp() {
       ]);
     });
 
-    socket.on("session:ended", (payload: { message?: string; serverNow?: number }) => {
-      syncServerClock(payload);
-      removeActiveSessionId();
-      const message = payload.message || "This round ended.";
-      setEndMessage(message);
-      setTurnState((current) => ({
-        ...current,
-        currentTurn: "paused",
-        turnEndsAt: null,
-      }));
-      setMessages((current) => [
-        ...current,
-        {
-          id: `${Date.now()}`,
-          author: "system",
-          text: message,
-          sentAt: Date.now(),
-        },
-      ]);
-      setPhase("ended");
-    });
+    socket.on("session:ended", finishSessionAsEnded);
 
     socket.on("session:result", (payload: ResultPayload) => {
       setNow(getServerNow());
@@ -828,9 +831,32 @@ function GameApp() {
   }
 
   function restart() {
+    const socket = socketRef.current;
+    const activeSessionId = sessionId || loadActiveSessionId() || "";
+    const shouldAbortSession =
+      phase === "matching" ||
+      phase === "chat" ||
+      phase === "ended";
+
     clearQueueUiTimers();
     removeActiveSessionId();
-    socketRef.current?.disconnect();
+    socketRef.current = null;
+
+    if (socket) {
+      socket.removeAllListeners();
+
+      if (shouldAbortSession && socket.connected) {
+        socket.timeout(1500).emit(
+          "session:abort",
+          { sessionId: activeSessionId || undefined },
+          () => socket.disconnect(),
+        );
+      } else {
+        socket.emit("queue:leave");
+        socket.disconnect();
+      }
+    }
+
     setPhase("landing");
     setConnection("idle");
     setSessionId("");
@@ -1052,9 +1078,9 @@ function GameApp() {
             canGuess={phase === "chat" && canGuess}
             counts={chatCounts}
             draft={draft}
-            endMessage={endMessage}
+            endMessage={endMessage || autoAbortMessage}
             finalGuessSecondsLeft={phase === "reveal" ? 0 : finalGuessSecondsLeft}
-            isEnded={phase === "ended"}
+            isEnded={phase === "ended" || Boolean(autoAbortMessage)}
             isLocked={isFinalGuessPhase || phase === "reveal"}
             isPlayerTurn={phase === "chat" && isPlayerTurn}
             lockedMessage={
