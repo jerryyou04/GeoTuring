@@ -65,16 +65,21 @@ function HumanReveal({ result, serverClockOffsetMs }: { result: ResultPayload; s
   const opponentGuess = result.opponentGuess;
   const opponentPending = Boolean(result.opponentPending) && !opponentGuess;
   const opponentActualPin = getActualPin(result.opponentActual || null);
+  const actualPlace = [result.actual.region, result.actual.country].filter(Boolean).join(", ") || "Location unavailable";
 
   return (
     <div className="mapComparisonGrid">
       {!guessedHuman && (
-        <AnswerCard title="Your answer">
-          <AnswerLine label="Read" value={formatIdentity(result.guess.identityGuess)} />
-          <AnswerLine label="Model family" value={result.guess.modelFamilyGuess || "No family picked"} />
-          <AnswerLine label="Actual" value="Human" />
-          <AnswerLine label="Location score" value="No location pin was scored because you guessed AI." />
-        </AnswerCard>
+        <div className="answerGrid">
+          <AnswerCard title="Your answer" tone="wrong">
+            <AnswerLine label="Opponent" state="mismatch" value={formatIdentity(result.guess.identityGuess)} />
+            <AnswerLine label="Model family" value={result.guess.modelFamilyGuess || "No family picked"} />
+          </AnswerCard>
+          <AnswerCard title="Correct answer" tone="correct">
+            <AnswerLine label="Opponent" value="Human" />
+            <AnswerLine label="Rough location" value={actualPlace} />
+          </AnswerCard>
+        </div>
       )}
       <LocationComparison
         correctLabel="Correct rough location"
