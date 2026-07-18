@@ -115,6 +115,7 @@ function HumanReveal({ result, serverClockOffsetMs }: { result: ResultPayload; s
 function AiReveal({ result, serverClockOffsetMs }: { result: ResultPayload; serverClockOffsetMs: number }) {
   const guessedAi = result.guess.identityGuess === "AI";
   const modelMatch = guessedAi && result.guess.modelFamilyGuess === result.actual.modelFamily;
+  const mapRead = result.guess.locationGuess;
 
   return (
     <>
@@ -132,6 +133,17 @@ function AiReveal({ result, serverClockOffsetMs }: { result: ResultPayload; serv
           <AnswerLine label="Model family" value={result.actual.modelFamily || "Unknown"} />
         </AnswerCard>
       </div>
+      {mapRead && (
+        <LocationComparison
+          correctLabel="Correct location"
+          correctPin={null}
+          detail="This is where your location read landed. An AI opponent has no correct location pin."
+          guessLabel="Your pin"
+          guessPin={mapRead}
+          missingCorrectLabel="No correct pin — opponent was AI"
+          title="Your map read"
+        />
+      )}
       <AiOpponentRead result={result} serverClockOffsetMs={serverClockOffsetMs} />
     </>
   );
@@ -196,6 +208,7 @@ function LocationComparison({
   detail,
   guessLabel,
   guessPin,
+  missingCorrectLabel = "Correct pin unavailable",
   title,
 }: {
   correctLabel: string;
@@ -203,6 +216,7 @@ function LocationComparison({
   detail: string;
   guessLabel: string;
   guessPin: Pin | null;
+  missingCorrectLabel?: string;
   title: string;
 }) {
   return (
@@ -215,7 +229,7 @@ function LocationComparison({
       </div>
       <ComparisonMap correctPin={correctPin} guessPin={guessPin} />
       <div className="pinSummary">
-        <span className="correct">{correctPin ? correctLabel : "Correct pin unavailable"}</span>
+        <span className="correct">{correctPin ? correctLabel : missingCorrectLabel}</span>
         <span className="guess">{guessPin ? guessLabel : "No guess pin"}</span>
       </div>
     </section>

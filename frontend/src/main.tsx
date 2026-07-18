@@ -1077,7 +1077,7 @@ function GameApp() {
     socket.emit("guess:submit", {
       sessionId: activeSessionId,
       identityGuess,
-      locationGuess: identityGuess === "Human" ? pin : null,
+      locationGuess: pin,
       modelFamilyGuess: identityGuess === "AI" ? nextModelGuess : null,
     });
     setPhase("waitingGuess");
