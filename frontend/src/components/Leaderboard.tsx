@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { API_URL } from "../config";
 import { loadName, loadOrCreatePlayerId, saveName } from "../storage";
-import type { LeaderboardEntry } from "../types";
+import type { LeaderboardEntry, LeaderboardResponse } from "../types";
 import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
+const LEADERBOARD_PAGE_SIZE = 25;
 
 export function Leaderboard() {
   const [state, setState] = useState<LoadState>("loading");
   const [players, setPlayers] = useState<LeaderboardEntry[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [name, setName] = useState(() => loadName());
   const [saving, setSaving] = useState(false);
 
@@ -18,21 +22,42 @@ export function Leaderboard() {
     let active = true;
     setState("loading");
 
-    fetch(`${API_URL}/api/leaderboard`)
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(LEADERBOARD_PAGE_SIZE),
+    });
+
+    fetch(`${API_URL}/api/leaderboard?${params.toString()}`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error("bad status"))))
-      .then((data: { enabled?: boolean; players?: LeaderboardEntry[] }) => {
+      .then((data: LeaderboardResponse) => {
         if (!active) {
           return;
         }
 
         if (data.enabled === false) {
+          setPlayers([]);
+          setTotal(0);
+          setTotalPages(0);
           setState("disabled");
           return;
         }
 
         const list = data.players || [];
+        const responseTotal = Number.isFinite(data.total) ? data.total : list.length;
+        const responseTotalPages = Number.isFinite(data.totalPages)
+          ? data.totalPages
+          : Math.ceil(responseTotal / LEADERBOARD_PAGE_SIZE);
+        const responsePage = Number.isFinite(data.page) ? Math.max(1, data.page) : page;
+
+        if (responsePage !== page) {
+          setPage(responsePage);
+          return;
+        }
+
         setPlayers(list);
-        setState(list.length ? "ready" : "empty");
+        setTotal(responseTotal);
+        setTotalPages(responseTotalPages);
+        setState(responseTotal > 0 ? "ready" : "empty");
       })
       .catch(() => {
         if (active) {
@@ -43,7 +68,7 @@ export function Leaderboard() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [page]);
 
   useEffect(() => load(), [load]);
 
@@ -128,10 +153,59 @@ export function Leaderboard() {
               <a className="primaryButton" href="/">Play the first round</a>
             </div>
           )}
-          {state === "ready" && <LeaderboardList players={players} />}
+          {state === "ready" && (
+            <>
+              <LeaderboardList players={players} />
+              <LeaderboardPager
+                page={page}
+                total={total}
+                totalPages={totalPages}
+                onPageChange={(nextPage) => {
+                  setState("loading");
+                  setPage(nextPage);
+                }}
+              />
+            </>
+          )}
         </section>
       </main>
     </div>
+  );
+}
+
+function LeaderboardPager({
+  page,
+  total,
+  totalPages,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <nav className="leaderboardPager" aria-label="Leaderboard pages">
+      <button
+        className="secondaryButton"
+        disabled={page <= 1}
+        onClick={() => onPageChange(Math.max(1, page - 1))}
+        type="button"
+      >
+        Previous
+      </button>
+      <span aria-live="polite">
+        Page {page} of {totalPages} ({total} player{total === 1 ? "" : "s"})
+      </span>
+      <button
+        className="secondaryButton"
+        disabled={page >= totalPages}
+        onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+        type="button"
+      >
+        Next
+      </button>
+    </nav>
   );
 }
 

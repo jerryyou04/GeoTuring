@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createQueueService } = require("../queue");
+const { resolveClientMessageId } = require("../sessionHelpers");
 
 function createSocket(id = "socket-1") {
   return {
@@ -8,40 +9,54 @@ function createSocket(id = "socket-1") {
     connected: true,
     data: {},
     events: [],
+    leftRooms: [],
     emit(event, payload) {
       this.events.push({ event, payload });
+    },
+    disconnect() {
+      this.connected = false;
+    },
+    leave(roomId) {
+      this.leftRooms.push(roomId);
     },
   };
 }
 
 function createService(overrides = {}) {
   const waitingQueue = new Map();
+  const socketSessions = overrides.socketSessions || new Map();
   const calls = {
-    abandon: [],
     createAi: [],
     find: [],
     resume: [],
   };
   const service = createQueueService({
     waitingQueue,
-    socketSessions: new Map(),
+    socketSessions,
     createAiSession(...args) {
       calls.createAi.push(args);
     },
     createHumanSession() {},
     findSessionByPlayerId(playerId, sessionId) {
       calls.find.push({ playerId, sessionId });
+
+      if (sessionId && Object.hasOwn(overrides, "preferredSession")) {
+        return overrides.preferredSession;
+      }
+
+      if (!sessionId && Object.hasOwn(overrides, "activeSession")) {
+        return overrides.activeSession;
+      }
+
       return overrides.resumableSession || null;
     },
     resumeSession(socket, payload) {
       calls.resume.push({ socket, payload });
     },
-    abandonSessionForQueue(session, playerId, replacementSocketId) {
-      calls.abandon.push({ session, playerId, replacementSocketId });
-    },
+    reconnectGraceMs: overrides.reconnectGraceMs,
   });
 
-  return { calls, service, waitingQueue };
+  return { calls, service, socketSessions, waitingQueue };
 }
 
 const validQueuePayload = {
@@ -55,14 +70,7 @@ const validQueuePayload = {
   },
 };
 
-test("queue service fails fast when fresh-session cleanup is not wired", () => {
-  assert.throws(
-    () => createQueueService({}),
-    /requires abandonSessionForQueue/,
-  );
-});
-
-test("a fresh queue request abandons the old session instead of resuming it", () => {
+test("a fresh queue request resumes an unfinished session instead of creating another game", () => {
   const socket = createSocket();
   const { calls, service, waitingQueue } = createService({
     resumableSession: { id: "old-session" },
@@ -73,22 +81,16 @@ test("a fresh queue request abandons the old session instead of resuming it", ()
   assert.deepEqual(calls.find, [
     {
       playerId: validQueuePayload.playerId,
-      sessionId: "",
+      sessionId: undefined,
     },
   ]);
-  assert.equal(calls.resume.length, 0);
-  assert.deepEqual(calls.abandon, [
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
     {
-      session: { id: "old-session" },
       playerId: validQueuePayload.playerId,
-      replacementSocketId: socket.id,
+      sessionId: "old-session",
     },
   ]);
-  assert.equal(waitingQueue.has(socket.id), true);
-  assert.equal(socket.events.at(-1).event, "queue:status");
-  assert.equal(socket.events.at(-1).payload.status, "searching");
-
-  service.removeFromQueue(socket.id);
+  assert.equal(waitingQueue.size, 0);
 });
 
 test("an explicit active session id still resumes the game", () => {
@@ -104,11 +106,10 @@ test("an explicit active session id still resumes the game", () => {
   assert.deepEqual(calls.find, [
     {
       playerId: validQueuePayload.playerId,
-      sessionId: resumableSession.id,
+      sessionId: undefined,
     },
   ]);
   assert.equal(calls.resume.length, 1);
-  assert.equal(calls.abandon.length, 0);
   assert.equal(calls.resume[0].socket, socket);
   assert.deepEqual(calls.resume[0].payload, {
     playerId: validQueuePayload.playerId,
@@ -117,10 +118,11 @@ test("an explicit active session id still resumes the game", () => {
   assert.equal(waitingQueue.size, 0);
 });
 
-test("an explicit session id never resumes a different session", () => {
+test("a stale explicit session id cannot bypass a different unfinished session", () => {
   const socket = createSocket();
   const { calls, service, waitingQueue } = createService({
-    resumableSession: { id: "different-session" },
+    preferredSession: { id: "different-session" },
+    activeSession: { id: "active-session" },
   });
 
   service.addToQueue(socket, {
@@ -128,16 +130,84 @@ test("an explicit session id never resumes a different session", () => {
     sessionId: "requested-session",
   });
 
-  assert.equal(calls.resume.length, 0);
-  assert.equal(calls.abandon.length, 0);
+  assert.deepEqual(calls.find, [
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: undefined,
+    },
+  ]);
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: "active-session",
+    },
+  ]);
   assert.equal(waitingQueue.size, 0);
+});
+
+test("an explicit completed session can still recover its retained result when no game is active", () => {
+  const socket = createSocket();
+  const completedSession = { id: "completed-session" };
+  const { calls, service, waitingQueue } = createService({
+    activeSession: null,
+    preferredSession: completedSession,
+  });
+
+  service.addToQueue(socket, {
+    ...validQueuePayload,
+    sessionId: completedSession.id,
+  });
+
+  assert.deepEqual(calls.find, [
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: undefined,
+    },
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: completedSession.id,
+    },
+  ]);
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: completedSession.id,
+    },
+  ]);
+  assert.equal(waitingQueue.size, 0);
+});
+
+test("an explicit missing session fails only when the player has no active game", () => {
+  const socket = createSocket();
+  const { calls, service, waitingQueue } = createService({
+    preferredSession: null,
+    activeSession: null,
+  });
+
+  service.addToQueue(socket, {
+    ...validQueuePayload,
+    sessionId: "missing-session",
+  });
+
+  assert.equal(calls.resume.length, 0);
+  assert.equal(waitingQueue.size, 0);
+  assert.deepEqual(calls.find, [
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: undefined,
+    },
+    {
+      playerId: validQueuePayload.playerId,
+      sessionId: "missing-session",
+    },
+  ]);
   assert.deepEqual(socket.events.at(-1), {
     event: "session:resume_failed",
     payload: { reason: "not_found" },
   });
 });
 
-test("a requested AI game also abandons an older session first", () => {
+test("a requested AI game resumes an unfinished session instead of replacing it", () => {
   const socket = createSocket();
   const oldSession = { id: "old-session" };
   const { calls, service } = createService({ resumableSession: oldSession });
@@ -153,16 +223,74 @@ test("a requested AI game also abandons an older session first", () => {
       sessionId: undefined,
     },
   ]);
-  assert.deepEqual(calls.abandon, [
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
     {
-      session: oldSession,
       playerId: validQueuePayload.playerId,
-      replacementSocketId: socket.id,
+      sessionId: oldSession.id,
     },
   ]);
-  assert.equal(calls.createAi.length, 1);
-  assert.equal(calls.createAi[0][0], socket);
-  assert.equal(calls.createAi[0][2], "ChatGPT");
+  assert.equal(calls.createAi.length, 0);
+});
+
+test("a completed socket mapping is released before joining a fresh queue", () => {
+  const socket = createSocket();
+  socket.data.playerId = validQueuePayload.playerId;
+  const socketSessions = new Map([[socket.id, "completed-session"]]);
+  const { calls, service, waitingQueue } = createService({ socketSessions });
+
+  service.addToQueue(socket, validQueuePayload);
+
+  assert.equal(calls.resume.length, 0);
+  assert.equal(socketSessions.has(socket.id), false);
+  assert.deepEqual(socket.leftRooms, ["completed-session"]);
+  assert.equal(waitingQueue.has(socket.id), true);
+
+  service.removeFromQueue(socket.id);
+});
+
+test("a changed queue player id cannot escape the socket's mapped active game", () => {
+  const socket = createSocket();
+  socket.data.playerId = "original-player";
+  const activeSession = { id: "active-session", completed: false, ended: false };
+  const socketSessions = new Map([[socket.id, activeSession.id]]);
+  const { calls, service, waitingQueue } = createService({
+    socketSessions,
+    preferredSession: activeSession,
+  });
+
+  service.addToQueue(socket, {
+    ...validQueuePayload,
+    playerId: "different-player",
+  });
+
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
+    { playerId: "original-player", sessionId: activeSession.id },
+  ]);
+  assert.equal(waitingQueue.size, 0);
+  assert.equal(socketSessions.get(socket.id), activeSession.id);
+});
+
+test("a changed AI-request player id cannot escape the socket's mapped active game", () => {
+  const socket = createSocket();
+  socket.data.playerId = "original-player";
+  const activeSession = { id: "active-session", completed: false, ended: false };
+  const socketSessions = new Map([[socket.id, activeSession.id]]);
+  const { calls, service } = createService({
+    socketSessions,
+    preferredSession: activeSession,
+  });
+
+  service.createRequestedAiSession(socket, {
+    ...validQueuePayload,
+    playerId: "different-player",
+    modelFamily: "Claude",
+  });
+
+  assert.deepEqual(calls.resume.map(({ payload }) => payload), [
+    { playerId: "original-player", sessionId: activeSession.id },
+  ]);
+  assert.equal(calls.createAi.length, 0);
+  assert.equal(socketSessions.get(socket.id), activeSession.id);
 });
 
 test("an AI request removes every queued socket for the same player", () => {
@@ -183,4 +311,81 @@ test("an AI request removes every queued socket for the same player", () => {
   assert.equal(calls.createAi[0][0], aiSocket);
   assert.equal(calls.createAi[0][2], "Claude");
   assert.equal(calls.createAi[0][3], queuedSocket.events[0].payload.queuedAt);
+});
+
+test("a reconnecting player keeps the same queue entry and fallback deadline", () => {
+  const firstSocket = createSocket("socket-before-drop");
+  const replacementSocket = createSocket("socket-after-drop");
+  const { service, waitingQueue } = createService();
+
+  service.addToQueue(firstSocket, validQueuePayload);
+  const originalEntry = waitingQueue.get(firstSocket.id);
+  const originalQueuedAt = originalEntry.queuedAt;
+  const originalFallbackAt = originalEntry.fallbackAt;
+
+  firstSocket.connected = false;
+  assert.equal(service.markDisconnected(firstSocket.id), true);
+  service.addToQueue(replacementSocket, validQueuePayload);
+
+  assert.equal(waitingQueue.has(firstSocket.id), false);
+  assert.equal(waitingQueue.get(replacementSocket.id), originalEntry);
+  assert.equal(originalEntry.socket, replacementSocket);
+  assert.equal(originalEntry.queuedAt, originalQueuedAt);
+  assert.equal(originalEntry.fallbackAt, originalFallbackAt);
+  assert.equal(replacementSocket.events.at(-1).payload.queuedAt, originalQueuedAt);
+
+  service.removeFromQueue(replacementSocket.id);
+});
+
+test("a half-open old queue socket is superseded without resetting queue time", () => {
+  const firstSocket = createSocket("socket-still-half-open");
+  const replacementSocket = createSocket("socket-replacement");
+  const { service, waitingQueue } = createService();
+
+  service.addToQueue(firstSocket, validQueuePayload);
+  const originalEntry = waitingQueue.get(firstSocket.id);
+  const originalQueuedAt = originalEntry.queuedAt;
+  const originalFallbackAt = originalEntry.fallbackAt;
+
+  service.addToQueue(replacementSocket, validQueuePayload);
+
+  assert.equal(waitingQueue.has(firstSocket.id), false);
+  assert.equal(waitingQueue.get(replacementSocket.id), originalEntry);
+  assert.equal(originalEntry.queuedAt, originalQueuedAt);
+  assert.equal(originalEntry.fallbackAt, originalFallbackAt);
+  assert.equal(firstSocket.connected, false);
+  assert.equal(firstSocket.events.at(-1).event, "queue:superseded");
+
+  service.removeFromQueue(replacementSocket.id);
+});
+
+test("a disconnected queue entry is removed after the reconnect grace", async () => {
+  const socket = createSocket();
+  const { service, waitingQueue } = createService({ reconnectGraceMs: 5 });
+
+  service.addToQueue(socket, validQueuePayload);
+  socket.connected = false;
+  service.markDisconnected(socket.id);
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(waitingQueue.size, 0);
+});
+
+test("legacy chat messages receive a generated effective id", () => {
+  const resolved = resolveClientMessageId(undefined, () => "generated-message-id");
+
+  assert.deepEqual(resolved, {
+    clientMessageId: "generated-message-id",
+    providedByClient: false,
+  });
+});
+
+test("client-provided chat ids remain stable for retry deduplication", () => {
+  const resolved = resolveClientMessageId("  client-message-id  ", () => "unused");
+
+  assert.deepEqual(resolved, {
+    clientMessageId: "client-message-id",
+    providedByClient: true,
+  });
 });

@@ -6,6 +6,7 @@ import {
   NAME_STORAGE_KEY,
   PLAYER_ID_STORAGE_KEY,
   SCORE_STORAGE_KEY,
+  SCORED_SESSION_IDS_STORAGE_KEY,
 } from "./config";
 import type { IpLocation, PersistentScore } from "./types";
 import { hasValidIpLocation, toLocationNumber, toScoreNumber } from "./utils";
@@ -42,6 +43,33 @@ export function savePersistentScore(score: PersistentScore) {
     window.localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(score));
   } catch {
     // The in-memory scoreboard still updates if storage is unavailable.
+  }
+}
+
+export function loadScoredSessionIds(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SCORED_SESSION_IDS_STORAGE_KEY) || "[]");
+
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string").slice(-200)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveScoredSessionIds(sessionIds: Iterable<string>) {
+  try {
+    window.localStorage.setItem(
+      SCORED_SESSION_IDS_STORAGE_KEY,
+      JSON.stringify([...sessionIds].slice(-200)),
+    );
+  } catch {
+    // The in-memory dedupe still works if storage is unavailable.
   }
 }
 

@@ -984,6 +984,19 @@ button:disabled {
   color: var(--on-blue);
 }
 
+.message.pending {
+  opacity: 0.72;
+}
+
+.messageDelivery {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  opacity: 0.8;
+  text-align: right;
+}
+
 .message.partner {
   align-self: start;
   border-bottom-left-radius: 5px;
@@ -1903,6 +1916,20 @@ button:disabled {
   white-space: nowrap;
 }
 
+.leaderboardPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.leaderboardPager span {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  text-align: center;
+}
+
 .historyTag {
   display: inline-flex;
   padding: 4px 10px;
@@ -2680,6 +2707,19 @@ button:disabled {
     padding: 2px 12px;
     font-size: 0.62rem;
     letter-spacing: 0.03em;
+  }
+
+  .leaderboardPager {
+    flex-wrap: wrap;
+  }
+
+  .leaderboardPager span {
+    order: -1;
+    flex-basis: 100%;
+  }
+
+  .leaderboardPager button {
+    flex: 1;
   }
 
   /* History keeps its horizontal scroll, but smoother and a touch tighter. */

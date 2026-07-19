@@ -1,13 +1,24 @@
 const { CHAT_SECONDS, MIN_MESSAGES_PER_SIDE } = require("./config");
+const { cryptoRandomId } = require("./utils");
+
+function resolveClientMessageId(value, createId = cryptoRandomId) {
+  const providedId = String(value || "").trim().slice(0, 100);
+
+  return {
+    clientMessageId: providedId || createId(),
+    providedByClient: Boolean(providedId),
+  };
+}
 
 function buildSessionResumePayload(session, socketId) {
+  const serverNow = Date.now();
   const submitted = session.mode === "human"
     ? Boolean(session.players[socketId]?.submitted)
     : Boolean(session.submitted);
 
   return {
     sessionId: session.id,
-    serverNow: Date.now(),
+    serverNow,
     chatStartsAt: session.chatStartsAt || null,
     chatEndsAt: session.chatEndsAt,
     chatSeconds: CHAT_SECONDS,
@@ -16,6 +27,18 @@ function buildSessionResumePayload(session, socketId) {
     chatLocked: session.chatLocked,
     finalGuessEndsAt: session.finalGuessEndsAt,
     submitted,
+    turnState: {
+      sessionId: session.id,
+      serverNow,
+      currentTurn: session.chatLocked || !session.turnOwner
+        ? "paused"
+        : session.turnOwner === socketId ? "player" : "partner",
+      turnEndsAt: session.chatLocked ? null : session.turnEndsAt,
+      canGuessEarly: false,
+      canAbort: false,
+      counts: getPersonalMessageCounts(session, socketId),
+      required: MIN_MESSAGES_PER_SIDE,
+    },
   };
 }
 
@@ -54,10 +77,10 @@ function isSocketInSession(session, socketId) {
 
   if (session.mode === "human") {
     const player = session.players[socketId];
-    return Boolean(player && !player.disconnected && !player.abandoned);
+    return Boolean(player && !player.disconnected);
   }
 
-  return session.playerSocketId === socketId && !session.disconnected && !session.abandoned;
+  return session.playerSocketId === socketId && !session.disconnected;
 }
 
 function getMessageCounts(session) {
@@ -121,5 +144,6 @@ module.exports = {
   isGuessReady,
   isSocketInSession,
   markSubmitted,
+  resolveClientMessageId,
   serializeMessagesForSocket,
 };

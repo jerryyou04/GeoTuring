@@ -6,10 +6,12 @@ const CORRECT_MARKER = createRevealMarker("correct");
 const GUESS_MARKER = createRevealMarker("guess");
 
 export function Reveal({
+  canRestart = true,
   result,
   onRestart,
   serverClockOffsetMs = 0,
 }: {
+  canRestart?: boolean;
   result: ResultPayload;
   onRestart: () => void;
   serverClockOffsetMs?: number;
@@ -51,8 +53,8 @@ export function Reveal({
         : <AiReveal result={result} serverClockOffsetMs={serverClockOffsetMs} />}
 
       <p className="explanation resultExplanation">{result.explanation}</p>
-      <button className="primaryButton" onClick={onRestart}>
-        Play again
+      <button className="primaryButton" disabled={!canRestart} onClick={onRestart}>
+        {canRestart ? "Play again" : "Finalizing round..."}
       </button>
     </section>
   );

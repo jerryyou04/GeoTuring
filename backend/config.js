@@ -2,6 +2,7 @@ const CHAT_SECONDS = 135;
 const TURN_SECONDS = 25;
 const FINAL_GUESS_SECONDS = 25;
 const MATCH_FOUND_HOLD_MS = 1800;
+const RECONNECT_GRACE_MS = 5000;
 
 module.exports = {
   PORT: process.env.PORT || 3000,
@@ -63,6 +64,7 @@ module.exports = {
   GUESS_GRACE_SECONDS: 300,
   MIN_MESSAGES_PER_SIDE: 2,
   MATCH_FOUND_HOLD_MS,
+  RECONNECT_GRACE_MS,
   TURN_SECONDS,
   TURN_MS: TURN_SECONDS * 1000,
 };

@@ -91,8 +91,8 @@ export function ChatRoom({
         ? "Ask something revealing..."
         : "Waiting for their message...";
   const expiredMessage = roundExpired
-    ? "Round time expired. Waiting for the final state."
-    : "Turn time expired. Waiting for the final state.";
+    ? "Round time expired."
+    : "Turn time expired.";
 
   useEffect(() => {
     const newestMessage = messages[messages.length - 1];
@@ -166,8 +166,9 @@ export function ChatRoom({
       <div className="messagesShell">
         <div className="messages" aria-live="polite" ref={messagesRef} onScroll={handleMessagesScroll}>
           {messages.map((message) => (
-            <div className={`message ${message.author}`} key={message.id}>
+            <div className={`message ${message.author} ${message.delivery || ""}`} key={message.id}>
               {message.text}
+              {message.delivery === "pending" && <small className="messageDelivery">Sending...</small>}
             </div>
           ))}
           {showPartnerTyping && (

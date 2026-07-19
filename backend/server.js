@@ -48,9 +48,11 @@ const {
   isGuessReady,
   isSocketInSession,
   markSubmitted,
+  resolveClientMessageId,
   serializeMessagesForSocket,
 } = require("./sessionHelpers");
 const { registerAdminRoutes } = require("./admin");
+const { createLeaderboardHandler } = require("./leaderboard");
 const { createQueueService } = require("./queue");
 const db = require("./db");
 const redis = require("./redis");
@@ -110,10 +112,6 @@ app.get("/api/history", async (req, res) => {
 
 const PLAYER_ID_RE = /^[a-zA-Z0-9_-]{8,80}$/;
 
-function autoPlayerName(playerId) {
-  return `Player-${String(playerId).slice(0, 4)}`;
-}
-
 function sanitizeDisplayName(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -134,35 +132,7 @@ app.post("/api/name", async (req, res) => {
   res.json({ ok: true, enabled: redis.isRedisEnabled(), name });
 });
 
-app.get("/api/leaderboard", async (req, res) => {
-  if (!redis.isRedisEnabled()) {
-    res.json({ enabled: false, players: [] });
-    return;
-  }
-
-  const limit = Number.parseInt(req.query.limit, 10) || 25;
-
-  try {
-    const rows = await redis.getTopPlayers(limit);
-
-    if (rows === null) {
-      res.json({ enabled: false, players: [] });
-      return;
-    }
-
-    const players = rows.map((row, index) => ({
-      rank: index + 1,
-      name: row.name || autoPlayerName(row.playerId),
-      games: row.games,
-      readAccuracy: row.games > 0 ? row.readSum / row.games : 0,
-    }));
-
-    res.json({ enabled: true, players });
-  } catch (error) {
-    console.error("Leaderboard query failed:", error.message);
-    res.status(500).json({ error: "leaderboard_unavailable" });
-  }
-});
+app.get("/api/leaderboard", createLeaderboardHandler({ redis }));
 
 function persistResultHistory(playerId, result, transcript = [], opponent = null) {
   if (!playerId || !result || !db.isDbEnabled()) {
@@ -290,12 +260,23 @@ function startAiOpponentGuess(session) {
   }
 
   session.aiGuessPromise = (async () => {
+    let resolvedGuess;
+
     try {
       const raw = await adapter.generateGuess(session.messages, { sessionId: session.id });
-      session.aiGuess = interpretAiGuess(raw);
+      resolvedGuess = interpretAiGuess(raw);
     } catch (error) {
       console.warn(`AI opponent guess failed for session ${session.id}: ${error.message}`);
+      resolvedGuess = { failed: true };
+    }
+
+    const missedDeadline = Number.isFinite(session.finalGuessEndsAt) && Date.now() >= session.finalGuessEndsAt;
+
+    if (missedDeadline && !session.aiFinalized) {
+      session.aiGuessExpired = true;
       session.aiGuess = { failed: true };
+    } else if (!session.aiGuessExpired && !session.aiFinalized) {
+      session.aiGuess = resolvedGuess;
     }
 
     return session.aiGuess;
@@ -411,6 +392,10 @@ function finalizeAiSession(session) {
   session.aiGuessPromise
     .catch(() => {})
     .then(() => {
+      if (session.aiFinalized) {
+        return;
+      }
+
       emitAiGuessFill(session);
       completeAiSession(session);
     });
@@ -457,11 +442,6 @@ function completeAiSession(session) {
     buildAiOpponentRecord(session),
   );
 
-  if (session.abandoned) {
-    deleteSession(session.id);
-    return;
-  }
-
   retainCompletedSession(session);
 }
 
@@ -475,7 +455,6 @@ const queueService = createQueueService({
   createHumanSession,
   findSessionByPlayerId,
   resumeSession,
-  abandonSessionForQueue,
 });
 registerAdminRoutes(app, { sessions, waitingQueue, db });
 
@@ -571,6 +550,7 @@ function createAiSession(socket, playerLocation, requestedModelFamily = null, qu
     aiGuessStarted: false,
     aiGuess: null,
     aiGuessPromise: null,
+    aiGuessExpired: false,
     aiFinalized: false,
     timeout: null,
     expireTimer: null,
@@ -638,7 +618,7 @@ function emitChatError(socket, sessionId, acknowledge, code, message, clientMess
 
 function handleChatMessage(socket, payload = {}, acknowledge) {
   const requestedSessionId = String(payload.sessionId || "");
-  const clientMessageId = String(payload.clientMessageId || "").trim().slice(0, 100);
+  const { clientMessageId, providedByClient } = resolveClientMessageId(payload.clientMessageId);
   const requestId = String(payload.requestId || "").trim().slice(0, 100);
   const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
 
@@ -657,7 +637,7 @@ function handleChatMessage(socket, payload = {}, acknowledge) {
 
   const text = String(payload.text || "").trim().slice(0, 400);
 
-  if (!text || !clientMessageId) {
+  if (!text) {
     emitChatError(
       socket,
       session.id,
@@ -670,9 +650,11 @@ function handleChatMessage(socket, payload = {}, acknowledge) {
     return;
   }
 
-  const existingMessage = session.messages.find((message) => (
-    message.author === socket.id && message.clientMessageId === clientMessageId
-  ));
+  const existingMessage = providedByClient
+    ? session.messages.find((message) => (
+        message.author === socket.id && message.clientMessageId === clientMessageId
+      ))
+    : null;
 
   if (existingMessage) {
     if (typeof acknowledge === "function") {
@@ -1056,7 +1038,7 @@ function findSessionByPlayerId(playerId, preferredSessionId = "") {
   }
 
   return [...sessions.values()]
-    .filter((session) => isPlayerInSession(session, playerId))
+    .filter((session) => !session.completed && isPlayerInSession(session, playerId))
     .sort((first, second) => second.createdAt - first.createdAt)[0] || null;
 }
 
@@ -1066,10 +1048,10 @@ function isPlayerInSession(session, playerId) {
   }
 
   if (session.mode === "human") {
-    return Object.values(session.players).some((player) => player.playerId === playerId && !player.abandoned);
+    return Object.values(session.players).some((player) => player.playerId === playerId);
   }
 
-  return session.playerId === playerId && !session.abandoned;
+  return session.playerId === playerId;
 }
 
 function deleteSocketSessionMapping(socketId, sessionId) {
@@ -1080,7 +1062,9 @@ function deleteSocketSessionMapping(socketId, sessionId) {
 
 function resumeSession(socket, payload = {}) {
   const playerId = sanitizePlayerId(payload.playerId);
-  const session = findSessionByPlayerId(playerId, payload.sessionId);
+  const requestedSessionId = String(payload.sessionId || "").trim();
+  const session = findSessionByPlayerId(playerId) ||
+    (requestedSessionId ? findSessionByPlayerId(playerId, requestedSessionId) : null);
 
   if (!session) {
     socket.emit("session:resume_failed", {
@@ -1089,7 +1073,24 @@ function resumeSession(socket, payload = {}) {
     return;
   }
 
-  const mappedSessionId = socketSessions.get(socket.id);
+  if (session.completed && [...waitingQueue.values()].some((entry) => entry.playerId === playerId)) {
+    socket.emit("session:resume_failed", {
+      reason: "newer_state",
+    });
+    return;
+  }
+
+  let mappedSessionId = socketSessions.get(socket.id);
+
+  if (mappedSessionId && mappedSessionId !== session.id) {
+    const mappedSession = sessions.get(mappedSessionId);
+
+    if (!mappedSession || mappedSession.completed || mappedSession.ended) {
+      deleteSocketSessionMapping(socket.id, mappedSessionId);
+      socket.leave(mappedSessionId);
+      mappedSessionId = null;
+    }
+  }
 
   if (mappedSessionId && mappedSessionId !== session.id) {
     socket.emit("session:resume_failed", {
@@ -1099,7 +1100,9 @@ function resumeSession(socket, payload = {}) {
   }
 
   socket.data.playerId = playerId;
-  queueService.removeQueuedPlayer(playerId);
+  if (!session.completed) {
+    queueService.removeQueuedPlayer(playerId);
+  }
 
   const socketId = reattachSessionSocket(session, playerId, socket);
 
@@ -1147,6 +1150,7 @@ function reattachSessionSocket(session, playerId, socket) {
     }
 
     const player = session.players[oldSocketId];
+    const oldSocketOwnsSession = socketSessions.get(oldSocketId) === session.id;
     session.messages.forEach((message) => {
       if (message.author === oldSocketId) {
         message.author = socket.id;
@@ -1159,7 +1163,6 @@ function reattachSessionSocket(session, playerId, socket) {
       ...player,
       socketId: socket.id,
       disconnected: false,
-      abandoned: false,
     };
 
     if (session.turnOwner === oldSocketId) {
@@ -1175,7 +1178,7 @@ function reattachSessionSocket(session, playerId, socket) {
       session.timeout.canActSocketId = socket.id;
     }
 
-    if (oldSocketId !== socket.id && oldSocket?.connected) {
+    if (oldSocketId !== socket.id && oldSocket?.connected && oldSocketOwnsSession) {
       oldSocket.emit("session:superseded", { sessionId: session.id });
       oldSocket.disconnect(true);
     } else if (oldSocketId !== socket.id) {
@@ -1191,6 +1194,7 @@ function reattachSessionSocket(session, playerId, socket) {
 
   const oldSocketId = session.playerSocketId;
   const oldSocket = io.sockets.sockets.get(oldSocketId);
+  const oldSocketOwnsSession = socketSessions.get(oldSocketId) === session.id;
 
   deleteSocketSessionMapping(oldSocketId, session.id);
 
@@ -1211,9 +1215,8 @@ function reattachSessionSocket(session, playerId, socket) {
 
   session.playerSocketId = socket.id;
   session.disconnected = false;
-  session.abandoned = false;
 
-  if (oldSocketId !== socket.id && oldSocket?.connected) {
+  if (oldSocketId !== socket.id && oldSocket?.connected && oldSocketOwnsSession) {
     oldSocket.emit("session:superseded", { sessionId: session.id });
     oldSocket.disconnect(true);
   } else if (oldSocketId !== socket.id) {
@@ -1588,11 +1591,25 @@ function finalizeMissingGuesses(sessionId) {
   }
 
   if (!session.submitted) {
+    if (session.aiGuessStarted && session.aiGuess === null) {
+      session.aiGuessExpired = true;
+      session.aiGuess = { failed: true };
+    }
+
     session.guess = createNoGuess();
     session.result = scoreAiGuess(session, session.guess);
     session.submitted = true;
     finalizeAiSession(session);
+    return;
   }
+
+  if (session.aiGuessStarted && session.aiGuess === null) {
+    session.aiGuessExpired = true;
+    session.aiGuess = { failed: true };
+  }
+
+  emitAiGuessFill(session);
+  completeAiSession(session);
 }
 
 function emitHumanPlayerResult(session, socketId) {
@@ -1673,159 +1690,6 @@ function emitSessionEnded(session, message, excludedSocketId = null) {
   });
 }
 
-function endAbortedSession(session, excludedSocketId = null) {
-  session.ended = true;
-  emitSessionEnded(session, "The round ended because your partner left.", excludedSocketId);
-  deleteSession(session.id);
-}
-
-function detachPlayerSocket(session, socketId) {
-  deleteSocketSessionMapping(socketId, session.id);
-  io.sockets.sockets.get(socketId)?.leave(session.id);
-
-  if (session.mode === "human" && session.players[socketId]) {
-    session.players[socketId].disconnected = true;
-    session.players[socketId].abandoned = true;
-  } else if (session.mode === "ai") {
-    session.disconnected = true;
-    session.abandoned = true;
-  }
-}
-
-function supersedeAbandonedSocket(sessionId, playerSocketId, replacementSocketId) {
-  if (!replacementSocketId || replacementSocketId === playerSocketId) {
-    return;
-  }
-
-  const oldSocket = io.sockets.sockets.get(playerSocketId);
-
-  if (!oldSocket?.connected) {
-    return;
-  }
-
-  oldSocket.emit("session:superseded", { sessionId });
-  oldSocket.disconnect(true);
-}
-
-function abandonSessionForQueue(session, playerId, replacementSocketId = null) {
-  if (!session || session.ended) {
-    return;
-  }
-
-  const playerSocketId = session.mode === "human"
-    ? Object.keys(session.players).find((socketId) => session.players[socketId].playerId === playerId)
-    : session.playerId === playerId
-      ? session.playerSocketId
-      : null;
-
-  if (!playerSocketId) {
-    return;
-  }
-
-  const sessionId = session.id;
-  const finishAbandonment = () => {
-    supersedeAbandonedSocket(sessionId, playerSocketId, replacementSocketId);
-
-    if (!replacementSocketId) {
-      return;
-    }
-
-    const remainingSession = findSessionByPlayerId(playerId);
-
-    if (remainingSession && remainingSession.id !== sessionId) {
-      abandonSessionForQueue(remainingSession, playerId, replacementSocketId);
-    }
-  };
-
-  if (!session.chatLocked) {
-    endAbortedSession(session, playerSocketId);
-    finishAbandonment();
-    return;
-  }
-
-  // Once final guesses have opened, preserve the other player's result flow.
-  // Leaving counts as no guess; an already-submitted player is simply detached.
-  if (session.mode === "ai") {
-    if (session.submitted) {
-      if (session.aiFinalized) {
-        deleteSession(session.id);
-      } else {
-        detachPlayerSocket(session, playerSocketId);
-      }
-    } else {
-      deleteSession(session.id);
-    }
-    finishAbandonment();
-    return;
-  }
-
-  const player = session.players[playerSocketId];
-
-  if (!player.submitted) {
-    player.guess = createNoGuess();
-    player.result = scoreHumanGuess(session, playerSocketId, player.guess);
-    player.submitted = true;
-
-    const partnerSocketId = getHumanPartnerSocketId(session, playerSocketId);
-    const partner = partnerSocketId ? session.players[partnerSocketId] : null;
-
-    if (partnerSocketId && partner?.submitted) {
-      emitOpponentGuessFill(session, partnerSocketId);
-    }
-  }
-
-  if (areHumanFinalGuessesDone(session)) {
-    clearFinalGuessTimer(session);
-    persistHumanGameHistory(session);
-    detachPlayerSocket(session, playerSocketId);
-
-    if (Object.values(session.players).every((candidate) => candidate.abandoned)) {
-      deleteSession(session.id);
-    } else {
-      retainCompletedSession(session);
-    }
-    finishAbandonment();
-    return;
-  }
-
-  detachPlayerSocket(session, playerSocketId);
-  finishAbandonment();
-}
-
-function handleSessionAbort(socket, payload = {}, acknowledge) {
-  const wasQueued = waitingQueue.has(socket.id);
-  queueService.removeFromQueue(socket.id);
-
-  const mappedSessionId = socketSessions.get(socket.id);
-  const requestedSessionId = String(payload.sessionId || mappedSessionId || "");
-  const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
-
-  if (!session || !isSocketInSession(session, socket.id)) {
-    if (typeof acknowledge === "function") {
-      acknowledge({ ok: wasQueued });
-    }
-    return;
-  }
-
-  if (session.chatLocked) {
-    const abortingPlayerId = session.mode === "human"
-      ? session.players[socket.id]?.playerId
-      : session.playerId;
-    abandonSessionForQueue(session, abortingPlayerId);
-
-    if (typeof acknowledge === "function") {
-      acknowledge({ ok: true });
-    }
-    return;
-  }
-
-  endAbortedSession(session, socket.id);
-
-  if (typeof acknowledge === "function") {
-    acknowledge({ ok: true });
-  }
-}
-
 function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The chat is locked. Make your final read.") {
   if (session.mode === "human") {
     Object.keys(session.players).forEach((socketId) => {
@@ -1853,7 +1717,7 @@ function emitRoundLocked(session, lockerSocketId = null, fallbackMessage = "The 
 }
 
 function handleDisconnect(socket) {
-  queueService.removeFromQueue(socket.id);
+  queueService.markDisconnected(socket.id);
 
   const sessionId = socketSessions.get(socket.id);
   const session = sessionId ? sessions.get(sessionId) : null;
@@ -1869,44 +1733,11 @@ function handleDisconnect(socket) {
     if (player) {
       player.disconnected = true;
     }
-
-    const partnerSocketId = getHumanPartnerSocketId(session, socket.id);
-
-    if (partnerSocketId && session.players[partnerSocketId] && !session.players[partnerSocketId].disconnected) {
-      socket.to(partnerSocketId).emit("partner:left", {
-        sessionId: session.id,
-        message: "Your partner disconnected. You can still make your guess.",
-      });
-    }
-  } else {
+  } else if (session.playerSocketId === socket.id) {
     session.disconnected = true;
   }
 
   deleteSocketSessionMapping(socket.id, session.id);
-  cleanupSessionIfDone(session);
-}
-
-function cleanupSessionIfDone(session) {
-  if (!sessions.has(session.id)) {
-    return;
-  }
-
-  if (session.completed) {
-    return;
-  }
-
-  if (session.mode === "human") {
-    const players = Object.values(session.players);
-    const done = players.every((player) => player.submitted);
-
-    if (!done) {
-      return;
-    }
-  } else if (!session.submitted || (session.aiGuessStarted && !session.aiFinalized)) {
-    return;
-  }
-
-  deleteSession(session.id);
 }
 
 function retainCompletedSession(session) {
@@ -1970,7 +1801,19 @@ function scheduleSessionExpiry(session) {
   const ttlMs = MATCH_FOUND_HOLD_MS + CHAT_SECONDS * 1000 + GUESS_GRACE_SECONDS * 1000;
 
   session.expireTimer = setTimeout(() => {
-    deleteSession(session.id);
+    const activeSession = sessions.get(session.id);
+
+    if (!activeSession || activeSession.ended || activeSession.completed) {
+      deleteSession(session.id);
+      return;
+    }
+
+    if (activeSession.chatLocked) {
+      finalizeMissingGuesses(activeSession.id);
+      return;
+    }
+
+    handleChatExpired(activeSession.id);
   }, ttlMs);
 }
 
@@ -1983,7 +1826,6 @@ io.on("connection", (socket) => {
   socket.on("queue:test_ai", (payload = {}) => queueService.createRequestedAiSession(socket, payload));
   socket.on("queue:leave", () => queueService.removeFromQueue(socket.id));
   socket.on("session:resume", (payload = {}) => resumeSession(socket, payload));
-  socket.on("session:abort", (payload = {}, acknowledge) => handleSessionAbort(socket, payload, acknowledge));
   socket.on("clock:sync", (payload = {}, acknowledge) => {
     if (typeof acknowledge === "function") {
       acknowledge({ serverNow: Date.now() });

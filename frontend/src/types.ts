@@ -13,6 +13,7 @@ export interface ChatMessage {
   author: "player" | "partner" | "system";
   text: string;
   sentAt: number;
+  delivery?: "pending";
 }
 
 export interface SessionCreatedPayload extends ServerClockPayload {
@@ -28,6 +29,7 @@ export interface SessionResumedPayload extends SessionCreatedPayload {
   chatLocked: boolean;
   finalGuessEndsAt: number | null;
   submitted: boolean;
+  turnState?: TurnStatePayload;
 }
 
 export interface QueueStatusPayload extends ServerClockPayload {
@@ -193,6 +195,10 @@ export interface LeaderboardEntry {
 
 export interface LeaderboardResponse {
   enabled: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
   players: LeaderboardEntry[];
 }
 

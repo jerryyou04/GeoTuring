@@ -66,40 +66,69 @@ async function setName(playerId, name) {
   }
 }
 
-// Top N by games played, joined with read sums + chosen names. null on failure.
-async function getTopPlayers(limit = 25) {
+// One leaderboard page by games played, joined with read sums + chosen names.
+// The total covers the full sorted set so callers can expose every player via
+// pagination. null on failure.
+async function getPlayersPage({ offset = 0, count = 25 } = {}) {
   if (!enabled) {
     return null;
   }
 
   try {
-    const n = Math.min(Math.max(1, limit), 100);
-    const flat = await client.zrevrange(GAMES_KEY, 0, n - 1, "WITHSCORES");
+    return await queryPlayersPage(client, { offset, count });
+  } catch (error) {
+    console.warn("Redis getPlayersPage failed:", error.message);
+    return null;
+  }
+}
 
-    const ids = [];
-    const games = [];
-    for (let i = 0; i < flat.length; i += 2) {
-      ids.push(flat[i]);
-      games.push(Number(flat[i + 1]));
-    }
+async function queryPlayersPage(redisClient, { offset = 0, count = 25 } = {}) {
+  const start = normalizeInt(offset, 0, 0);
+  const pageSize = normalizeInt(count, 25, 1);
+  const [totalValue, flat] = await Promise.all([
+    redisClient.zcard(GAMES_KEY),
+    redisClient.zrevrange(GAMES_KEY, start, start + pageSize - 1, "WITHSCORES"),
+  ]);
 
-    if (ids.length === 0) {
-      return [];
-    }
+  const ids = [];
+  const games = [];
+  for (let i = 0; i < flat.length; i += 2) {
+    ids.push(flat[i]);
+    games.push(Number(flat[i + 1]));
+  }
 
-    const reads = await client.hmget(READ_KEY, ...ids);
-    const names = await client.hmget(NAMES_KEY, ...ids);
+  if (ids.length === 0) {
+    return { total: Number(totalValue) || 0, players: [] };
+  }
 
-    return ids.map((id, i) => ({
+  const reads = await redisClient.hmget(READ_KEY, ...ids);
+  const names = await redisClient.hmget(NAMES_KEY, ...ids);
+
+  return {
+    total: Number(totalValue) || 0,
+    players: ids.map((id, i) => ({
       playerId: id,
       games: games[i],
       readSum: Number(reads[i]) || 0,
       name: names[i] || null,
-    }));
-  } catch (error) {
-    console.warn("Redis getTopPlayers failed:", error.message);
-    return null;
+    })),
+  };
+}
+
+// Kept for callers that only need the first page.
+async function getTopPlayers(limit = 25) {
+  const result = await getPlayersPage({ offset: 0, count: limit });
+  return result ? result.players : null;
+}
+
+function normalizeInt(value, fallback, min) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
   }
+
+  return Math.max(min, Math.trunc(parsed));
 }
 
 // Idempotent absolute seed from Postgres (source of truth) — safe to re-run on
@@ -126,6 +155,8 @@ module.exports = {
   isRedisEnabled,
   bumpPlayer,
   setName,
+  getPlayersPage,
   getTopPlayers,
+  queryPlayersPage,
   seed,
 };

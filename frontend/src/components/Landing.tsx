@@ -91,7 +91,7 @@ function PersistentScoreboard({ score }: { score: PersistentScore }) {
       <p className="roundLabel">Your scoreboard</p>
       <div className="persistentScoreRows">
         <ScoreLine label="Reads" value={`${score.readEarned}/${score.readPossible}`} detail={`${readPercent}%`} />
-        <ScoreLine label="Human score" value={`${roundScore(score.humanEarned)}/${score.humanPossible}`} detail={`${humanAverage}% avg`} />
+        <ScoreLine label="Human score" value={`${roundScore(score.humanEarned)}/${score.humanPossible}`} detail={`${humanAverage}%`} />
         <ScoreLine label="AI score" value={`${score.aiEarned}/${score.aiPossible}`} detail={`${aiPercent}%`} />
       </div>
     </aside>

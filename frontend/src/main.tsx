@@ -46,12 +46,14 @@ import {
   loadLocationConsent,
   loadOrCreatePlayerId,
   loadPersistentScore,
+  loadScoredSessionIds,
   removeActiveSessionId,
   removeIpLocation,
   saveActiveSessionId,
   saveIpLocation,
   saveLocationConsent,
   savePersistentScore,
+  saveScoredSessionIds,
 } from "./storage";
 import { AdminConsole } from "./components/AdminConsole";
 import { ChatRoom } from "./components/ChatRoom";
@@ -69,7 +71,7 @@ import { HistoryIcon, LeaderboardIcon } from "./components/NavIcons";
 import { Reveal } from "./components/Reveal";
 import { StatusPill } from "./components/StatusPill";
 
-const RECONNECT_UI_GRACE_MS = 1800;
+const RECONNECT_UI_GRACE_MS = 5000;
 
 function App() {
   const path = window.location.pathname;
@@ -100,6 +102,9 @@ function GameApp() {
     clientMessageId: string;
     requestId: string;
     text: string;
+    sentAt: number;
+    playerCount: number;
+    attempts: number;
   } | null>(null);
   const activeSendRequestRef = useRef("");
   const locallyEndedSessionRef = useRef("");
@@ -107,6 +112,7 @@ function GameApp() {
     sessionId: string;
     phase: "ended" | "reveal";
   } | null>(null);
+  const completedSessionIdRef = useRef("");
   const systemMessageSequenceRef = useRef(0);
   const serverClockOffsetRef = useRef(0);
   const hasSyncedServerClockRef = useRef(false);
@@ -117,7 +123,7 @@ function GameApp() {
   const sessionAttachedRef = useRef(false);
   const connectionInterruptionVisibleRef = useRef(false);
   const hiddenAiRequestPendingRef = useRef(false);
-  const scoredSessionsRef = useRef<Set<string>>(new Set());
+  const scoredSessionsRef = useRef<Set<string>>(new Set(loadScoredSessionIds()));
   const [phase, setPhase] = useState<Phase>(() => currentSessionIdRef.current ? "matching" : "landing");
   const [connection, setConnection] = useState("idle");
   const [sessionReady, setSessionReady] = useState(false);
@@ -241,7 +247,6 @@ function GameApp() {
     }
 
     locallyEndedSessionRef.current = activeSessionId;
-    sendingMessageRef.current = false;
     setSessionReady(false);
     setPendingGuessConfirm(false);
     setEndMessage(timeoutMessage);
@@ -264,6 +269,8 @@ function GameApp() {
 
     if (activeSessionId) {
       resumeActiveSession(activeSessionId);
+    } else {
+      probeActiveSession();
     }
   }, []);
 
@@ -345,6 +352,7 @@ function GameApp() {
     const generation = ++gameGenerationRef.current;
     const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
+      tryAllTransports: true,
     });
     socketRef.current = socket;
 
@@ -366,6 +374,9 @@ function GameApp() {
   }
 
   function rememberSession(nextSessionId: string) {
+    if (completedSessionIdRef.current !== nextSessionId) {
+      completedSessionIdRef.current = "";
+    }
     currentSessionIdRef.current = nextSessionId;
     setSessionId(nextSessionId);
     saveActiveSessionId(nextSessionId);
@@ -385,6 +396,7 @@ function GameApp() {
     connectionInterruptionVisibleRef.current = false;
     locallyEndedSessionRef.current = "";
     terminalSessionRef.current = null;
+    completedSessionIdRef.current = "";
     pendingMessageRef.current = null;
     activeSendRequestRef.current = "";
     setSessionId("");
@@ -396,9 +408,168 @@ function GameApp() {
   }
 
   function appendMessage(message: ChatMessage) {
-    setMessages((current) => current.some((item) => item.id === message.id)
+    setMessages((current) => current.some((item) => (
+      item.id === message.id ||
+      Boolean(message.clientMessageId && item.clientMessageId === message.clientMessageId)
+    ))
       ? current
       : [...current, message]);
+  }
+
+  function buildPendingBubble(pending: NonNullable<typeof pendingMessageRef.current>): ChatMessage {
+    return {
+      id: `pending:${pending.clientMessageId}`,
+      clientMessageId: pending.clientMessageId,
+      author: "player",
+      text: pending.text,
+      sentAt: pending.sentAt,
+      delivery: "pending",
+    };
+  }
+
+  function confirmPendingMessage(clientMessageId: string, confirmedMessage?: ChatMessage) {
+    const pending = pendingMessageRef.current;
+
+    if (!pending || pending.clientMessageId !== clientMessageId) {
+      return;
+    }
+
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    sendingMessageRef.current = false;
+    setDraft((current) => current === pending.text ? "" : current);
+    setMessages((current) => current.map((message) => {
+      if (message.clientMessageId !== clientMessageId && message.id !== `pending:${clientMessageId}`) {
+        return message;
+      }
+
+      return confirmedMessage
+        ? { ...confirmedMessage, clientMessageId: confirmedMessage.clientMessageId || clientMessageId }
+        : { ...message, delivery: undefined };
+    }));
+  }
+
+  function discardPendingMessage() {
+    const pending = pendingMessageRef.current;
+
+    if (!pending) {
+      return;
+    }
+
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    sendingMessageRef.current = false;
+    setMessages((current) => current.filter((message) => (
+      message.clientMessageId !== pending.clientMessageId &&
+      message.id !== `pending:${pending.clientMessageId}`
+    )));
+  }
+
+  function failPendingMessage(
+    clientMessageId: string,
+    kind: string,
+    message: string,
+  ) {
+    const pending = pendingMessageRef.current;
+
+    if (!pending || pending.clientMessageId !== clientMessageId) {
+      return;
+    }
+
+    pendingMessageRef.current = null;
+    activeSendRequestRef.current = "";
+    sendingMessageRef.current = false;
+    setMessages((current) => current.filter((item) => (
+      item.clientMessageId !== clientMessageId && item.id !== `pending:${clientMessageId}`
+    )));
+    setDraft((current) => current || pending.text);
+    appendSystemMessage(pending.sessionId, kind, message);
+  }
+
+  function transmitPendingMessage() {
+    const pending = pendingMessageRef.current;
+    const socket = socketRef.current;
+
+    if (
+      !pending ||
+      sendingMessageRef.current ||
+      !sessionAttachedRef.current ||
+      !socket?.connected ||
+      currentSessionIdRef.current !== pending.sessionId
+    ) {
+      return;
+    }
+
+    const generation = gameGenerationRef.current;
+    const requestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    pending.requestId = requestId;
+    pending.attempts += 1;
+    activeSendRequestRef.current = requestId;
+    sendingMessageRef.current = true;
+
+    socket.timeout(4000).emit(
+      "chat:message",
+      {
+        sessionId: pending.sessionId,
+        clientMessageId: pending.clientMessageId,
+        requestId,
+        text: pending.text,
+      },
+      (error: unknown, response?: ChatSendAck) => {
+        const activePending = pendingMessageRef.current;
+
+        if (
+          !isCurrentAttempt(socket, generation) ||
+          currentSessionIdRef.current !== pending.sessionId ||
+          activeSendRequestRef.current !== requestId ||
+          activePending?.clientMessageId !== pending.clientMessageId
+        ) {
+          return;
+        }
+
+        activeSendRequestRef.current = "";
+        sendingMessageRef.current = false;
+
+        if (error) {
+          if (activePending.attempts >= 2) {
+            failPendingMessage(
+              activePending.clientMessageId,
+              "chat-timeout",
+              "Message not sent. Check your connection and try again.",
+            );
+            return;
+          }
+
+          if (socket.connected && sessionAttachedRef.current) {
+            socket.emit("session:resume", {
+              playerId: playerIdRef.current,
+              sessionId: activePending.sessionId,
+            });
+          }
+          return;
+        }
+
+        if (!response?.ok) {
+          failPendingMessage(
+            activePending.clientMessageId,
+            `chat-error:${response?.code || "unknown"}`,
+            response?.error || "Message not sent. Try again.",
+          );
+          return;
+        }
+
+        if (response.sessionId !== activePending.sessionId || !response.message) {
+          failPendingMessage(
+            activePending.clientMessageId,
+            "chat-error:invalid-response",
+            "Message not sent. Try again.",
+          );
+          return;
+        }
+
+        confirmPendingMessage(activePending.clientMessageId, response.message);
+      },
+    );
   }
 
   function appendSystemMessage(sessionId: string, kind: string, text: string) {
@@ -496,10 +667,9 @@ function GameApp() {
       sessionId: endedSessionId,
       phase: "ended",
     };
-    pendingMessageRef.current = null;
-    activeSendRequestRef.current = "";
+    completedSessionIdRef.current = endedSessionId;
+    discardPendingMessage();
     setSessionReady(false);
-    sendingMessageRef.current = false;
     setEndMessage(message);
     setPendingGuessConfirm(false);
     setFinalGuessEndsAt(null);
@@ -518,6 +688,27 @@ function GameApp() {
   }
 
   function registerSocketStateListeners(socket: Socket, generation: number) {
+    socket.on("queue:superseded", () => {
+      if (!isCurrentAttempt(socket, generation) || currentSessionIdRef.current) {
+        return;
+      }
+
+      clearQueueUiTimers();
+      clearReconnectUiTimer();
+      socketRef.current = null;
+      socket.removeAllListeners();
+      socket.disconnect();
+      setConnection("idle");
+      setQueueStatus("idle");
+      setConnectedProfiles(0);
+      setRequiredProfiles(2);
+      setQueueStartedAt(null);
+      queueStartedAtRef.current = null;
+      queueFoundAtRef.current = null;
+      setQueueFrozenSeconds(null);
+      setPhase("landing");
+    });
+
     socket.on("disconnect", () => {
       if (!isCurrentAttempt(socket, generation)) {
         return;
@@ -526,15 +717,10 @@ function GameApp() {
       sessionAttachedRef.current = false;
       sendingMessageRef.current = false;
       activeSendRequestRef.current = "";
-      const pendingMessage = pendingMessageRef.current;
-
-      if (pendingMessage?.sessionId === currentSessionIdRef.current) {
-        setDraft((current) => current || pendingMessage.text);
-      }
 
       clearReconnectUiTimer();
 
-      if (!currentSessionIdRef.current || !socket.active) {
+      if (!socket.active) {
         connectionInterruptionVisibleRef.current = true;
         setSessionReady(false);
         setConnection("disconnected");
@@ -559,7 +745,7 @@ function GameApp() {
         return;
       }
 
-      if (currentSessionIdRef.current && reconnectUiTimerRef.current !== null) {
+      if (reconnectUiTimerRef.current !== null) {
         return;
       }
 
@@ -583,12 +769,23 @@ function GameApp() {
       syncServerClock(payload);
       setTurnState(payload);
 
+      const pendingMessage = pendingMessageRef.current;
+
+      if (
+        pendingMessage?.sessionId === payload.sessionId &&
+        payload.counts.player > pendingMessage.playerCount
+      ) {
+        confirmPendingMessage(pendingMessage.clientMessageId);
+      }
+
       if (
         locallyEndedSessionRef.current === payload.sessionId &&
         payload.turnEndsAt !== null &&
         payload.turnEndsAt > getServerNow()
       ) {
         locallyEndedSessionRef.current = "";
+        completedSessionIdRef.current = "";
+        saveActiveSessionId(payload.sessionId);
         setEndMessage("");
         markSessionAttached();
         setPhase("chat");
@@ -614,12 +811,8 @@ function GameApp() {
         return;
       }
 
-      activeSendRequestRef.current = "";
-      sendingMessageRef.current = false;
-      pendingMessageRef.current = null;
-      setDraft((current) => current || pendingMessage.text);
-      appendSystemMessage(
-        payload.sessionId!,
+      failPendingMessage(
+        pendingMessage.clientMessageId,
         `chat-error:${payload.code || "unknown"}`,
         payload.message || "Wait for your turn before sending a message.",
       );
@@ -649,9 +842,9 @@ function GameApp() {
 
         syncServerClock(payload);
         locallyEndedSessionRef.current = "";
-        pendingMessageRef.current = null;
-        activeSendRequestRef.current = "";
-        sendingMessageRef.current = false;
+        completedSessionIdRef.current = "";
+        saveActiveSessionId(payload.sessionId);
+        discardPendingMessage();
         setPendingGuessConfirm(false);
         setFinalGuessEndsAt(payload.guessEndsAt || null);
         setTurnState((current) => ({
@@ -668,22 +861,12 @@ function GameApp() {
           terminalSessionRef.current?.sessionId === payload.sessionId &&
           terminalSessionRef.current.phase === "reveal"
             ? current
-            : current === "waitingGuess" ? current : "identity"
+            : ["identity", "humanGuess", "aiGuess", "waitingGuess"].includes(current)
+              ? current
+              : "identity"
         ));
       },
     );
-
-    socket.on("partner:left", (payload: { sessionId: string; message?: string }) => {
-      if (!isCurrentSessionEvent(socket, generation, payload)) {
-        return;
-      }
-
-      appendSystemMessage(
-        payload.sessionId,
-        "partner-left",
-        payload.message || "Your partner disconnected. You can still make your guess.",
-      );
-    });
 
     socket.on("session:ended", (payload: { sessionId: string; message?: string; serverNow?: number }) => {
       if (isCurrentSessionEvent(socket, generation, payload)) {
@@ -696,23 +879,29 @@ function GameApp() {
         return;
       }
 
+      const isComplete = payload.opponentPending !== true;
+
       setNow(getServerNow());
       clearReconnectUiTimer();
-      sessionAttachedRef.current = false;
+      sessionAttachedRef.current = !isComplete;
       connectionInterruptionVisibleRef.current = false;
       locallyEndedSessionRef.current = "";
       terminalSessionRef.current = {
         sessionId: payload.sessionId,
         phase: "reveal",
       };
-      pendingMessageRef.current = null;
-      activeSendRequestRef.current = "";
+      discardPendingMessage();
       setSessionReady(false);
-      sendingMessageRef.current = false;
       recordPersistentScore(payload);
       setResult(payload);
       setFinalGuessEndsAt(null);
-      removeStoredSessionIfCurrent(payload.sessionId);
+      if (isComplete) {
+        completedSessionIdRef.current = payload.sessionId;
+        removeStoredSessionIfCurrent(payload.sessionId);
+      } else {
+        completedSessionIdRef.current = "";
+        saveActiveSessionId(payload.sessionId);
+      }
       setPhase("reveal");
     });
 
@@ -727,6 +916,10 @@ function GameApp() {
           return;
         }
 
+        completedSessionIdRef.current = payload.sessionId;
+        sessionAttachedRef.current = false;
+        setSessionReady(false);
+        removeStoredSessionIfCurrent(payload.sessionId);
         setResult((current) => current
           ? {
               ...current,
@@ -747,19 +940,64 @@ function GameApp() {
       clearReconnectUiTimer();
       socketRef.current = null;
       socket.removeAllListeners();
-      forgetCurrentSession(false);
-      setConnection("idle");
-      setMessages([]);
-      setPhase("landing");
+      socket.disconnect();
+      sessionAttachedRef.current = false;
+      sendingMessageRef.current = false;
+      activeSendRequestRef.current = "";
+      setSessionReady(false);
+      setConnection("disconnected");
     });
+  }
+
+  function handleResumeFailed(
+    socket: Socket,
+    generation: number,
+    payload: { reason?: string } = {},
+  ) {
+    if (!isCurrentAttempt(socket, generation)) {
+      return;
+    }
+
+    const failedSessionId = currentSessionIdRef.current;
+    const terminalState = terminalSessionRef.current;
+    const serverConfirmedFinished = payload.reason === "not_found" || payload.reason === "newer_state";
+
+    clearQueueUiTimers();
+    clearReconnectUiTimer();
+    socketRef.current = null;
+    socket.removeAllListeners();
+    socket.disconnect();
+    sessionAttachedRef.current = false;
+    connectionInterruptionVisibleRef.current = false;
+    setSessionReady(false);
+    setConnection("idle");
+
+    if (serverConfirmedFinished && terminalState?.sessionId === failedSessionId) {
+      completedSessionIdRef.current = failedSessionId;
+      removeStoredSessionIfCurrent(failedSessionId);
+
+      if (terminalState.phase === "reveal") {
+        setResult((current) => current ? { ...current, opponentPending: false } : current);
+      }
+      return;
+    }
+
+    if (!serverConfirmedFinished) {
+      setConnection("disconnected");
+      return;
+    }
+
+    forgetCurrentSession();
+    setPhase("landing");
   }
 
   function resumeActiveSession(activeSessionId: string) {
     clearQueueUiTimers();
     currentSessionIdRef.current = activeSessionId;
     setSessionId(activeSessionId);
+    saveActiveSessionId(activeSessionId);
     setSessionReady(false);
-    setPhase("matching");
+    setPhase((current) => current === "landing" ? "matching" : current);
     setQueueStatus("found");
     setConnectedProfiles(2);
     setConnection("connecting");
@@ -780,12 +1018,12 @@ function GameApp() {
       requestServerClockSync(socket, generation);
       socket.emit("session:resume", {
         playerId: playerIdRef.current,
-        sessionId: activeSessionId,
+        sessionId: currentSessionIdRef.current || activeSessionId,
       });
     });
 
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
-      if (!isCurrentAttempt(socket, generation) || payload.sessionId !== currentSessionIdRef.current) {
+      if (!isCurrentAttempt(socket, generation)) {
         return;
       }
 
@@ -794,41 +1032,48 @@ function GameApp() {
       enterResumedSession(payload);
     });
 
-    socket.on("session:resume_failed", () => {
+    socket.on("session:resume_failed", (payload: { reason?: string }) => {
+      handleResumeFailed(socket, generation, payload);
+    });
+  }
+
+  function probeActiveSession() {
+    const { generation, socket } = replaceGameSocket();
+    registerSocketStateListeners(socket, generation);
+    registerSessionListeners(socket, generation);
+
+    socket.on("connect", () => {
       if (!isCurrentAttempt(socket, generation)) {
         return;
       }
 
-      if (terminalSessionRef.current?.sessionId === currentSessionIdRef.current) {
-        clearReconnectUiTimer();
-        sessionAttachedRef.current = false;
-        connectionInterruptionVisibleRef.current = false;
-        socketRef.current = null;
-        socket.removeAllListeners();
-        socket.disconnect();
-        setSessionReady(false);
-        setConnection("idle");
+      requestServerClockSync(socket, generation);
+      socket.emit("session:resume", {
+        playerId: playerIdRef.current,
+      });
+    });
+
+    socket.on("session:resumed", (payload: SessionResumedPayload) => {
+      if (!isCurrentAttempt(socket, generation)) {
         return;
       }
 
-      socketRef.current = null;
-      socket.removeAllListeners();
-      socket.disconnect();
-      forgetCurrentSession();
-      setConnection("idle");
-      setPhase("landing");
+      syncServerClock(payload);
+      rememberSession(payload.sessionId);
+      enterResumedSession(payload);
+    });
+
+    socket.on("session:resume_failed", (payload: { reason?: string }) => {
+      handleResumeFailed(socket, generation, payload);
     });
   }
 
   function startMatchmaking() {
-    if (!locationConsent) {
-      setLocationStatus("required");
-      return;
-    }
+    const activeSessionId = currentSessionIdRef.current || loadActiveSessionId() || "";
 
-    if (!hasValidIpLocation(ipLocation)) {
-      setLocationStatus(ipLocation ? "invalid" : "required");
-      fetchIpLocation();
+    if (activeSessionId && completedSessionIdRef.current !== activeSessionId) {
+      rememberSession(activeSessionId);
+      resumeActiveSession(activeSessionId);
       return;
     }
 
@@ -860,6 +1105,7 @@ function GameApp() {
     currentSessionIdRef.current = "";
     locallyEndedSessionRef.current = "";
     terminalSessionRef.current = null;
+    completedSessionIdRef.current = "";
     pendingMessageRef.current = null;
     activeSendRequestRef.current = "";
     setSessionId("");
@@ -918,7 +1164,14 @@ function GameApp() {
       setPhase("landing");
       setConnection("idle");
       setQueueFrozenSeconds(null);
-      setLocationStatus(payload.code === "location_required" ? "invalid" : "unavailable");
+      if (payload.code === "location_required") {
+        setLocationStatus(locationConsent ? "invalid" : "required");
+        if (locationConsent) {
+          fetchIpLocation();
+        }
+      } else {
+        setLocationStatus("unavailable");
+      }
     });
 
     socket.on("session:created", (payload: SessionCreatedPayload) => {
@@ -936,6 +1189,7 @@ function GameApp() {
           if (
             isCurrentAttempt(socket, generation) &&
             socket.connected &&
+            sessionAttachedRef.current &&
             currentSessionIdRef.current === payload.sessionId
           ) {
             enterChat(payload);
@@ -945,7 +1199,7 @@ function GameApp() {
     });
 
     socket.on("session:resumed", (payload: SessionResumedPayload) => {
-      if (!isCurrentAttempt(socket, generation) || payload.sessionId !== currentSessionIdRef.current) {
+      if (!isCurrentAttempt(socket, generation)) {
         return;
       }
 
@@ -954,30 +1208,8 @@ function GameApp() {
       enterResumedSession(payload);
     });
 
-    socket.on("session:resume_failed", () => {
-      if (!isCurrentAttempt(socket, generation)) {
-        return;
-      }
-
-      if (terminalSessionRef.current?.sessionId === currentSessionIdRef.current) {
-        clearReconnectUiTimer();
-        sessionAttachedRef.current = false;
-        connectionInterruptionVisibleRef.current = false;
-        socketRef.current = null;
-        socket.removeAllListeners();
-        socket.disconnect();
-        setSessionReady(false);
-        setConnection("idle");
-        return;
-      }
-
-      clearQueueUiTimers();
-      socketRef.current = null;
-      socket.removeAllListeners();
-      socket.disconnect();
-      forgetCurrentSession();
-      setConnection("idle");
-      setPhase("landing");
+    socket.on("session:resume_failed", (payload: { reason?: string }) => {
+      handleResumeFailed(socket, generation, payload);
     });
   }
 
@@ -1018,83 +1250,35 @@ function GameApp() {
       !activeSessionId ||
       phase !== "chat" ||
       !isPlayerTurn ||
-      !sessionAttachedRef.current ||
-      !socket?.connected ||
-      sendingMessageRef.current
+      !socket ||
+      (!socket.connected && !socket.active)
     ) {
       return;
     }
 
-    const generation = gameGenerationRef.current;
-    const pendingMessage = pendingMessageRef.current;
-    const clientMessageId = pendingMessage?.sessionId === activeSessionId && pendingMessage.text === text
-      ? pendingMessage.clientMessageId
-      : window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-    const requestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const existingPending = pendingMessageRef.current;
+
+    if (existingPending) {
+      if (existingPending.sessionId === activeSessionId && existingPending.text === text) {
+        transmitPendingMessage();
+      }
+      return;
+    }
+
+    const clientMessageId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
     pendingMessageRef.current = {
       sessionId: activeSessionId,
       clientMessageId,
-      requestId,
+      requestId: "",
       text,
+      sentAt: Date.now(),
+      playerCount: chatCounts.player,
+      attempts: 0,
     };
-    activeSendRequestRef.current = requestId;
-    sendingMessageRef.current = true;
+    appendMessage(buildPendingBubble(pendingMessageRef.current));
     setDraft("");
-
-    socket.timeout(4000).emit(
-      "chat:message",
-      {
-        sessionId: activeSessionId,
-        clientMessageId,
-        requestId,
-        text,
-      },
-      (error: unknown, response?: ChatSendAck) => {
-        if (
-          !isCurrentAttempt(socket, generation) ||
-          currentSessionIdRef.current !== activeSessionId ||
-          activeSendRequestRef.current !== requestId
-        ) {
-          return;
-        }
-
-        activeSendRequestRef.current = "";
-        sendingMessageRef.current = false;
-
-        if (error) {
-          if (pendingMessageRef.current?.clientMessageId !== clientMessageId) {
-            return;
-          }
-          setDraft((current) => current || text);
-          appendSystemMessage(activeSessionId, "chat-timeout", "Message not sent. Check your connection and try again.");
-          return;
-        }
-
-        if (!response?.ok) {
-          if (pendingMessageRef.current?.requestId === requestId) {
-            pendingMessageRef.current = null;
-          }
-          setDraft((current) => current || text);
-          appendSystemMessage(
-            activeSessionId,
-            `chat-error:${response?.code || "unknown"}`,
-            response?.error || "Message not sent. Try again.",
-          );
-          return;
-        }
-
-        if (response.sessionId !== activeSessionId || !response.message) {
-          setDraft((current) => current || text);
-          return;
-        }
-
-        if (pendingMessageRef.current?.requestId === requestId) {
-          pendingMessageRef.current = null;
-        }
-        appendMessage(response.message);
-      },
-    );
+    transmitPendingMessage();
   }
 
   function chooseIdentity(value: IdentityGuess) {
@@ -1162,7 +1346,21 @@ function GameApp() {
   function restart() {
     const socket = socketRef.current;
     const activeSessionId = currentSessionIdRef.current || loadActiveSessionId() || "";
-    const shouldAbortSession = phase !== "landing";
+
+    if (activeSessionId && completedSessionIdRef.current !== activeSessionId) {
+      rememberSession(activeSessionId);
+
+      if (socket?.connected && sessionAttachedRef.current) {
+        return;
+      }
+
+      resumeActiveSession(activeSessionId);
+      return;
+    }
+
+    if (phase === "matching" && !activeSessionId) {
+      return;
+    }
 
     clearQueueUiTimers();
     clearReconnectUiTimer();
@@ -1170,6 +1368,7 @@ function GameApp() {
     currentSessionIdRef.current = "";
     locallyEndedSessionRef.current = "";
     terminalSessionRef.current = null;
+    completedSessionIdRef.current = "";
     pendingMessageRef.current = null;
     activeSendRequestRef.current = "";
     sessionAttachedRef.current = false;
@@ -1181,17 +1380,8 @@ function GameApp() {
 
     if (socket) {
       socket.removeAllListeners();
-
-      if (shouldAbortSession && socket.connected) {
-        socket.timeout(1500).emit(
-          "session:abort",
-          { sessionId: activeSessionId || undefined },
-          () => socket.disconnect(),
-        );
-      } else {
-        socket.emit("queue:leave");
-        socket.disconnect();
-      }
+      socket.emit("queue:leave");
+      socket.disconnect();
     }
 
     setPhase("landing");
@@ -1236,6 +1426,7 @@ function GameApp() {
     currentSessionIdRef.current = payload.sessionId;
     locallyEndedSessionRef.current = "";
     terminalSessionRef.current = null;
+    completedSessionIdRef.current = "";
     setSessionId(payload.sessionId);
     markSessionAttached();
     setChatEndsAt(payload.chatEndsAt);
@@ -1258,19 +1449,43 @@ function GameApp() {
 
   function enterResumedSession(payload: SessionResumedPayload) {
     clearQueueUiTimers();
+    const wasSameSession = currentSessionIdRef.current === payload.sessionId;
     currentSessionIdRef.current = payload.sessionId;
     locallyEndedSessionRef.current = "";
+    completedSessionIdRef.current = "";
+    saveActiveSessionId(payload.sessionId);
     sendingMessageRef.current = false;
+    activeSendRequestRef.current = "";
     const pendingMessage = pendingMessageRef.current;
     const preserveReveal = terminalSessionRef.current?.sessionId === payload.sessionId &&
       terminalSessionRef.current.phase === "reveal" &&
       payload.submitted;
-    const pendingWasAccepted = Boolean(
+    const resumedBeforeChatStarts = !payload.chatLocked &&
+      Number.isFinite(payload.chatStartsAt) &&
+      Number(payload.chatStartsAt) > getServerNow();
+    const pendingWasAccepted = Boolean(pendingMessage?.sessionId === payload.sessionId && payload.messages.some(
+      (message) => (
+        message.author === "player" &&
+        (
+          message.clientMessageId === pendingMessage.clientMessageId ||
+          (
+            !message.clientMessageId &&
+            message.text === pendingMessage.text &&
+            Math.abs(message.sentAt - pendingMessage.sentAt) < 15_000
+          )
+        )
+      ),
+    ));
+    const shouldRetryPending = Boolean(
       pendingMessage?.sessionId === payload.sessionId &&
-      payload.messages.some((message) => message.clientMessageId === pendingMessage.clientMessageId),
+      !pendingWasAccepted &&
+      !payload.chatLocked &&
+      !payload.submitted,
     );
 
     if (pendingWasAccepted) {
+      pendingMessageRef.current = null;
+    } else if (pendingMessage && !shouldRetryPending) {
       pendingMessageRef.current = null;
     }
 
@@ -1287,20 +1502,23 @@ function GameApp() {
         return current === pendingMessage.text ? "" : current;
       }
 
-      return current || pendingMessage.text;
+      return shouldRetryPending ? current : current || pendingMessage.text;
     });
-    setTurnState(EMPTY_TURN_STATE);
+    setTurnState(payload.turnState || EMPTY_TURN_STATE);
+    const resumedMessages: ChatMessage[] = payload.messages.length
+      ? payload.messages
+      : [
+        {
+          id: `intro:${payload.sessionId}`,
+          author: "system",
+          text: payload.intro,
+          sentAt: Date.now(),
+        },
+      ];
     setMessages(
-      payload.messages.length
-        ? payload.messages
-        : [
-          {
-            id: `intro:${payload.sessionId}`,
-            author: "system",
-            text: payload.intro,
-            sentAt: Date.now(),
-          },
-        ],
+      shouldRetryPending && pendingMessage
+        ? [...resumedMessages, buildPendingBubble(pendingMessage)]
+        : resumedMessages,
     );
     setQueueStatus("found");
     setConnectedProfiles(2);
@@ -1311,9 +1529,41 @@ function GameApp() {
       setEndMessage("");
     }
     setPendingGuessConfirm(false);
-    setPhase(preserveReveal
-      ? "reveal"
-      : payload.chatLocked ? (payload.submitted ? "waitingGuess" : "identity") : "chat");
+    if (!wasSameSession) {
+      setIdentityGuess(null);
+      setPin(null);
+      setModelGuess(null);
+    }
+
+    setPhase((current) => {
+      if (preserveReveal) {
+        return "reveal";
+      }
+
+      if (payload.chatLocked) {
+        if (payload.submitted) {
+          return "waitingGuess";
+        }
+
+        return wasSameSession && ["identity", "humanGuess", "aiGuess"].includes(current)
+          ? current
+          : "identity";
+      }
+
+      return resumedBeforeChatStarts ? "matching" : "chat";
+    });
+
+    if (resumedBeforeChatStarts) {
+      queueTimersRef.current.push(window.setTimeout(() => {
+        if (currentSessionIdRef.current === payload.sessionId && sessionAttachedRef.current) {
+          setPhase((current) => current === "matching" ? "chat" : current);
+        }
+      }, Math.max(0, Number(payload.chatStartsAt) - getServerNow())));
+    }
+
+    if (shouldRetryPending) {
+      transmitPendingMessage();
+    }
   }
 
   function recordPersistentScore(payload: ResultPayload) {
@@ -1322,6 +1572,7 @@ function GameApp() {
     }
 
     scoredSessionsRef.current.add(payload.sessionId);
+    saveScoredSessionIds(scoredSessionsRef.current);
 
     setPersistentScore((current) => {
       const isHumanRound = payload.actual.participantType === "Human";
@@ -1462,7 +1713,9 @@ function GameApp() {
               phase === "waitingGuess"
                 ? "Final answer locked. Waiting for the other result beside the chat."
                 : phase === "reveal"
-                  ? "Round complete. Review the result beside the chat."
+                  ? result?.opponentPending
+                    ? "Final answer locked. Finalizing the round beside the chat."
+                    : "Round complete. Review the result beside the chat."
                   : "Chat locked. Make your final read beside the chat."
             }
             messages={messages}
@@ -1505,6 +1758,7 @@ function GameApp() {
           {phase === "waitingGuess" && <WaitingGuessScreen secondsLeft={finalGuessSecondsLeft} />}
           {phase === "reveal" && result && (
             <Reveal
+              canRestart={result.opponentPending !== true}
               result={result}
               serverClockOffsetMs={serverClockOffsetRef.current}
               onRestart={restart}
