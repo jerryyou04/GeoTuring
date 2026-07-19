@@ -197,6 +197,19 @@ button:disabled {
   background: rgba(59, 130, 246, 0.2);
 }
 
+.navItem.primary:disabled,
+.navItem.primary:disabled:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+.navItem.primary:disabled .navIcon {
+  background: var(--surface-3);
+  color: var(--text-faint);
+}
+
 .navIcon {
   display: grid;
   width: 22px;

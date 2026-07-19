@@ -10,10 +10,12 @@ function createSocket(id = "socket-1") {
     data: {},
     events: [],
     leftRooms: [],
+    disconnectCalls: 0,
     emit(event, payload) {
       this.events.push({ event, payload });
     },
     disconnect() {
+      this.disconnectCalls += 1;
       this.connected = false;
     },
     leave(roomId) {
@@ -337,7 +339,7 @@ test("a reconnecting player keeps the same queue entry and fallback deadline", (
   service.removeFromQueue(replacementSocket.id);
 });
 
-test("a half-open old queue socket is superseded without resetting queue time", () => {
+test("a half-open old queue socket is made inert without closing its transport", () => {
   const firstSocket = createSocket("socket-still-half-open");
   const replacementSocket = createSocket("socket-replacement");
   const { service, waitingQueue } = createService();
@@ -353,10 +355,47 @@ test("a half-open old queue socket is superseded without resetting queue time", 
   assert.equal(waitingQueue.get(replacementSocket.id), originalEntry);
   assert.equal(originalEntry.queuedAt, originalQueuedAt);
   assert.equal(originalEntry.fallbackAt, originalFallbackAt);
-  assert.equal(firstSocket.connected, false);
+  assert.equal(firstSocket.connected, true);
+  assert.equal(firstSocket.disconnectCalls, 0);
   assert.equal(firstSocket.events.at(-1).event, "queue:superseded");
+  assert.equal(firstSocket.data.supersededQueuePlayerIds.has(validQueuePayload.playerId), true);
+
+  service.addToQueue(firstSocket, validQueuePayload);
+  service.removeFromQueue(firstSocket.id);
+  firstSocket.connected = false;
+
+  assert.equal(waitingQueue.get(replacementSocket.id), originalEntry);
+  assert.equal(waitingQueue.has(firstSocket.id), false);
+  assert.equal(service.markDisconnected(firstSocket.id), false);
+  assert.equal(waitingQueue.get(replacementSocket.id), originalEntry);
 
   service.removeFromQueue(replacementSocket.id);
+});
+
+test("a superseded queue socket cannot replace the current queue with an AI game", () => {
+  const firstSocket = createSocket("socket-stale");
+  const replacementSocket = createSocket("socket-current");
+  const { calls, service, waitingQueue } = createService();
+
+  service.addToQueue(firstSocket, validQueuePayload);
+  service.addToQueue(replacementSocket, validQueuePayload);
+  const currentEntry = waitingQueue.get(replacementSocket.id);
+
+  service.createRequestedAiSession(firstSocket, {
+    ...validQueuePayload,
+    modelFamily: "Claude",
+  });
+
+  assert.equal(calls.createAi.length, 0);
+  assert.equal(waitingQueue.get(replacementSocket.id), currentEntry);
+  assert.equal(waitingQueue.has(firstSocket.id), false);
+
+  service.removeFromQueue(replacementSocket.id);
+
+  service.addToQueue(firstSocket, validQueuePayload);
+  assert.equal(waitingQueue.has(firstSocket.id), true);
+  assert.equal(firstSocket.data.supersededQueuePlayerIds.has(validQueuePayload.playerId), false);
+  service.removeFromQueue(firstSocket.id);
 });
 
 test("a disconnected queue entry is removed after the reconnect grace", async () => {

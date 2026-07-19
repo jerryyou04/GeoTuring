@@ -5,6 +5,7 @@ import type { ChatMessage, MessageCounts, TurnStatePayload } from "../types";
 import { formatSeconds } from "../utils";
 
 export function ChatRoom({
+  canRestart,
   canGuess,
   counts,
   messages,
@@ -26,6 +27,7 @@ export function ChatRoom({
   onGuess,
   onRestart,
 }: {
+  canRestart: boolean;
   canGuess: boolean;
   counts: MessageCounts;
   messages: ChatMessage[];
@@ -188,8 +190,8 @@ export function ChatRoom({
 
       {isEnded ? (
         <div className="composer endedComposer">
-          <button className="primaryButton" type="button" onClick={onRestart}>
-            Play again
+          <button className="primaryButton" disabled={!canRestart} type="button" onClick={onRestart}>
+            {canRestart ? "Play again" : "Finalizing round..."}
           </button>
         </div>
       ) : isLocked ? (

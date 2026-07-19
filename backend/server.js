@@ -46,11 +46,15 @@ const {
   getHumanPartnerSocketId,
   getPersonalMessageCounts,
   isGuessReady,
-  isSocketInSession,
   markSubmitted,
   resolveClientMessageId,
   serializeMessagesForSocket,
 } = require("./sessionHelpers");
+const {
+  isCurrentSessionSocket,
+  isSessionOwnershipSuperseded,
+  transferSessionSocket,
+} = require("./socketOwnership");
 const { registerAdminRoutes } = require("./admin");
 const { createLeaderboardHandler } = require("./leaderboard");
 const { createQueueService } = require("./queue");
@@ -622,7 +626,7 @@ function handleChatMessage(socket, payload = {}, acknowledge) {
   const requestId = String(payload.requestId || "").trim().slice(0, 100);
   const session = requestedSessionId ? sessions.get(requestedSessionId) : null;
 
-  if (!isSocketInSession(session, socket.id)) {
+  if (!isCurrentSessionSocket(session, socket, socketSessions)) {
     emitChatError(
       socket,
       requestedSessionId,
@@ -792,7 +796,7 @@ function handleChatMessage(socket, payload = {}, acknowledge) {
 function handleGuessSubmit(socket, payload = {}) {
   const session = sessions.get(payload.sessionId);
 
-  if (!isSocketInSession(session, socket.id) || session.ended || session.completed) {
+  if (!isCurrentSessionSocket(session, socket, socketSessions) || session.ended || session.completed) {
     return;
   }
 
@@ -859,7 +863,7 @@ function handleGuessSubmit(socket, payload = {}) {
 function handleRoundLock(socket, payload = {}) {
   const session = sessions.get(payload.sessionId);
 
-  if (!isSocketInSession(session, socket.id) || session.ended || session.chatLocked) {
+  if (!isCurrentSessionSocket(session, socket, socketSessions) || session.ended || session.chatLocked) {
     return;
   }
 
@@ -1073,6 +1077,13 @@ function resumeSession(socket, payload = {}) {
     return;
   }
 
+  if (isSessionOwnershipSuperseded(socket, session.id)) {
+    socket.emit("session:resume_failed", {
+      reason: "superseded",
+    });
+    return;
+  }
+
   if (session.completed && [...waitingQueue.values()].some((entry) => entry.playerId === playerId)) {
     socket.emit("session:resume_failed", {
       reason: "newer_state",
@@ -1099,18 +1110,25 @@ function resumeSession(socket, payload = {}) {
     return;
   }
 
-  socket.data.playerId = playerId;
-  if (!session.completed) {
-    queueService.removeQueuedPlayer(playerId);
-  }
-
-  const socketId = reattachSessionSocket(session, playerId, socket);
+  const socketId = transferSessionSocket({
+    session,
+    playerId,
+    socket,
+    socketSessions,
+    getSocket: (socketId) => io.sockets.sockets.get(socketId),
+    armTurnTimer,
+  });
 
   if (!socketId) {
     socket.emit("session:resume_failed", {
       reason: "not_found",
     });
     return;
+  }
+
+  socket.data.playerId = playerId;
+  if (!session.completed) {
+    queueService.removeQueuedPlayer(playerId);
   }
 
   socket.join(session.id);
@@ -1139,90 +1157,6 @@ function resumeSession(socket, payload = {}) {
   } else if (session.submitted && session.result) {
     io.to(socket.id).emit("session:result", buildAiPlayerResultPayload(session));
   }
-}
-
-function reattachSessionSocket(session, playerId, socket) {
-  if (session.mode === "human") {
-    const oldSocketId = Object.keys(session.players).find((socketId) => session.players[socketId].playerId === playerId);
-
-    if (!oldSocketId) {
-      return null;
-    }
-
-    const player = session.players[oldSocketId];
-    const oldSocketOwnsSession = socketSessions.get(oldSocketId) === session.id;
-    session.messages.forEach((message) => {
-      if (message.author === oldSocketId) {
-        message.author = socket.id;
-      }
-    });
-    const oldSocket = io.sockets.sockets.get(oldSocketId);
-    delete session.players[oldSocketId];
-    deleteSocketSessionMapping(oldSocketId, session.id);
-    session.players[socket.id] = {
-      ...player,
-      socketId: socket.id,
-      disconnected: false,
-    };
-
-    if (session.turnOwner === oldSocketId) {
-      session.turnOwner = socket.id;
-      armTurnTimer(session);
-    }
-
-    if (session.startTurnOwner === oldSocketId) {
-      session.startTurnOwner = socket.id;
-    }
-
-    if (session.timeout?.canActSocketId === oldSocketId) {
-      session.timeout.canActSocketId = socket.id;
-    }
-
-    if (oldSocketId !== socket.id && oldSocket?.connected && oldSocketOwnsSession) {
-      oldSocket.emit("session:superseded", { sessionId: session.id });
-      oldSocket.disconnect(true);
-    } else if (oldSocketId !== socket.id) {
-      oldSocket?.leave(session.id);
-    }
-
-    return socket.id;
-  }
-
-  if (session.playerId !== playerId) {
-    return null;
-  }
-
-  const oldSocketId = session.playerSocketId;
-  const oldSocket = io.sockets.sockets.get(oldSocketId);
-  const oldSocketOwnsSession = socketSessions.get(oldSocketId) === session.id;
-
-  deleteSocketSessionMapping(oldSocketId, session.id);
-
-  if (session.turnOwner === oldSocketId) {
-    session.turnOwner = socket.id;
-    armTurnTimer(session);
-  }
-
-  if (session.startTurnOwner === oldSocketId) {
-    session.startTurnOwner = socket.id;
-  }
-
-  session.messages.forEach((message) => {
-    if (message.author === oldSocketId) {
-      message.author = socket.id;
-    }
-  });
-
-  session.playerSocketId = socket.id;
-  session.disconnected = false;
-
-  if (oldSocketId !== socket.id && oldSocket?.connected && oldSocketOwnsSession) {
-    oldSocket.emit("session:superseded", { sessionId: session.id });
-    oldSocket.disconnect(true);
-  } else if (oldSocketId !== socket.id) {
-    oldSocket?.leave(session.id);
-  }
-  return socket.id;
 }
 
 function scheduleInitialTurn(session, owner) {

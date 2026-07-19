@@ -8,6 +8,11 @@ const {
   sanitizeLocation,
   sanitizePlayerId,
 } = require("./sanitizers");
+const {
+  clearQueueOwnershipSuperseded,
+  isQueueOwnershipSuperseded,
+  supersedeQueueSocket,
+} = require("./socketOwnership");
 const { randomInt } = require("./utils");
 
 function createQueueService({
@@ -25,9 +30,19 @@ function createQueueService({
     }
 
     const playerId = sanitizePlayerId(payload.playerId);
+    const activeSession = findSessionByPlayerId(playerId);
+
+    if (isQueueOwnershipSuperseded(socket, playerId)) {
+      if (activeSession || findQueuedPlayer(playerId)) {
+        supersedeQueueSocket(socket, playerId);
+        return;
+      }
+
+      clearQueueOwnershipSuperseded(socket, playerId);
+    }
+
     socket.data.playerId = playerId;
     const requestedSessionId = String(payload.sessionId || "").trim();
-    const activeSession = findSessionByPlayerId(playerId);
 
     if (activeSession) {
       resumeSession(socket, {
@@ -105,8 +120,18 @@ function createQueueService({
     }
 
     const playerId = sanitizePlayerId(payload.playerId);
-    socket.data.playerId = playerId;
     const activeSession = findSessionByPlayerId(playerId);
+
+    if (isQueueOwnershipSuperseded(socket, playerId)) {
+      if (activeSession || findQueuedPlayer(playerId)) {
+        supersedeQueueSocket(socket, playerId);
+        return;
+      }
+
+      clearQueueOwnershipSuperseded(socket, playerId);
+    }
+
+    socket.data.playerId = playerId;
 
     if (activeSession) {
       resumeSession(socket, {
@@ -212,11 +237,8 @@ function createQueueService({
     entry.socket = socket;
     waitingQueue.set(socket.id, entry);
 
-    if (oldSocketId !== socket.id && oldSocket.connected) {
-      oldSocket.emit("queue:superseded", {
-        message: "This queue moved to a newer connection.",
-      });
-      oldSocket.disconnect?.(true);
+    if (oldSocketId !== socket.id) {
+      supersedeQueueSocket(oldSocket, entry.playerId);
     }
   }
 
