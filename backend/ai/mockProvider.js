@@ -34,10 +34,7 @@ const OPENING_LINES = [
 const DODGE_LINES = [
   "why, you writing a book?",
   "somewhere with terrible wifi",
-  "antarctica obviously",
   "not telling, nice try",
-  "a country you've definitely never heard of",
-  "mars rn",
   "guess",
 ];
 
@@ -73,7 +70,7 @@ function createMockAiProvider(modelFamily, persona) {
       }
 
       if (normalized.includes("where") || normalized.includes("from")) {
-        return buildLocalReply(shapeMockReply(pick(DODGE_LINES), persona));
+        return buildLocalReply(buildMockLocationReply(persona));
       }
 
       if (normalized.includes("?")) {
@@ -93,6 +90,32 @@ function createMockAiProvider(modelFamily, persona) {
       return { failed: true, source: "local", model: "mock", error: "AI guess unavailable in mock mode." };
     },
   };
+}
+
+function buildMockLocationReply(persona) {
+  const location = persona?.location;
+
+  if (!location?.city || !location?.country) {
+    return applyCasing(pick(DODGE_LINES), persona);
+  }
+
+  if (persona.locationDisclosure === "direct") {
+    return applyCasing(pick([
+      location.city,
+      `${location.city}, ${location.country}`,
+      `im from ${location.city}`,
+    ]), persona);
+  }
+
+  if (persona.locationDisclosure === "vague") {
+    return applyCasing(pick([
+      location.country,
+      `somewhere in ${location.country}`,
+      `im from ${location.country}`,
+    ]), persona);
+  }
+
+  return applyCasing(pick(DODGE_LINES), persona);
 }
 
 function buildLocalReply(text) {

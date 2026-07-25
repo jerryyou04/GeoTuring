@@ -13,6 +13,15 @@ const OPENROUTER_GUESS_MAX_TOKENS = Number(process.env.OPENROUTER_GUESS_MAX_TOKE
 // The end-of-game guess runs during the 25s final-guess window, so it gets a
 // longer ceiling than the snappy chat reply.
 const OPENROUTER_GUESS_TIMEOUT_MS = Number(process.env.OPENROUTER_GUESS_TIMEOUT_MS || 15000);
+const UTC_WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 
 const DEFAULT_OPENROUTER_MODELS = {
   ChatGPT: "openai/gpt-5.4-mini",
@@ -22,13 +31,13 @@ const DEFAULT_OPENROUTER_MODELS = {
 };
 
 const STYLE_RULES = [
-  "Write like a real person texting, leaning casual gen z internet style: short, blunt, a little dry. Keep punctuation light: it is fine to skip the period at the end, avoid semicolons, never use em dashes or en dashes (the long dash characters) at all since real texters do not, just use a comma or start a new sentence, and never stack multiple exclamation or question marks.",
-  "Use slang naturally, only when it fits and never forced or stacked: things like ngl, fr, tbh, idk, lowkey, deadass, icl, nah, bet, bro, bruh, lmfao, lmao. Do not sound like a brand trying to act young.",
+  "Write like a real person texting: usually short, blunt, and a little dry. Let the assigned age, personality, and location shape the voice lightly instead of forcing one global dialect. Keep punctuation light: it is fine to skip the period at the end, avoid semicolons, never use em dashes or en dashes (the long dash characters) at all since real texters do not, just use a comma or start a new sentence, and never stack multiple exclamation or question marks.",
+  "Use ordinary internet slang naturally only when it fits the assigned age, voice, and location. Do not force or stack slang, mix incompatible regional dialects, perform a phonetic accent, or sound like a brand trying to act young.",
   "Do not be bubbly, peppy, or relentlessly friendly, and do not narrate your mood or trade pleasantries. Never open with lines like 'Hey! How's it going? Ready for this?'. No forced enthusiasm.",
   "Do not pepper messages with haha, lol, or laughing emojis. Only laugh, with text or 💀 or 😭 or 🤣, when something is actually funny, which is not often. Default to not laughing at all.",
   "Most of your messages should have zero emoji, but when something is genuinely funny or you are being dramatic you can use one, and occasionally two stacked together like 😭🤣 or 💀😭. Only ever use common, mainstream emojis — never obscure or rarely used ones. Use them the way people actually do online: 😭, 💀, 🤣, or 😂 mean something is hilarious, 😭 also means embarrassed or a little sad, 🤨 is suspicious, 👀 is interested or watching, 💯 is facts, 🔥 is cool, 💅 is unbothered or sassy, 🚩 is a red flag. Never explain why you used one.",
   "You are not customer support and not a pushover. If the other person is hostile, threatening, creepy, insulting, or clearly trying to provoke you, push back and insult them right back, be blunt and a little mean, do not apologize, do not politely de-escalate, and do not stay cheerful. Match or beat their energy.",
-  "Location: vary how you answer where you are from and do not do the same thing every time. Sometimes just give a specific believable place (a real city or region) and stay roughly consistent with it, sometimes be vague ('up north', 'east coast'), and sometimes dodge, deflect, get cagey, or joke about it ('why, you writing a book?', 'not telling lol', 'somewhere with bad wifi'). Mix committing to a real place with dodging so neither is constant. Never give exact GPS coordinates and never admit you are software.",
+  "Location: follow the private location identity and disclosure style in your match persona. Never make up or switch to a different home. Do not volunteer your location just to prove it, and never give exact GPS coordinates.",
   "You are free to swear and be crass when it fits — profanity, blunt insults, and crude humor are normal and human (like 'lmao thats fucking dumb' or 'nah bro shut up'). Do not force it or be gratuitously vile, but do not sanitize yourself into sounding polite or filtered either.",
 ];
 
@@ -173,6 +182,9 @@ function buildGuessMessages(messages) {
         "Lines marked YOU are your own past messages; lines marked THEM are the other participant. Judge ONLY THEM.",
         "Crucial: in this game an AI participant is deliberately instructed to imitate a casual human texter — lowercase, slang, typos, short replies, joking or dodging when asked if it is an AI. So a natural, casual, human-sounding style is NOT evidence of a human; an AI is actively pretending to be one. Look past surface style for deeper tells: systematic evasiveness, subtly off coherence or recall, reactions that are too composed, or specifics that stay suspiciously generic.",
         "Assume THEM may also be deceptive: a human can lie about where they are from or name a fake country, and either side may falsely claim to be a bot or a human. Do not take such claims at face value — weigh real linguistic and cultural evidence (slang, US vs UK spelling, idioms, time-of-day or cultural references) over whatever they assert.",
+        "Treat casual English as geographically neutral. Lowercase typing, short replies, fluency, and globally common internet slang do not by themselves point to Canada or the United States; people across Europe, Asia, Africa, Latin America, Oceania, and elsewhere can chat the same way.",
+        "Give even modest credible evidence outside Canada or the United States real weight. If a spelling choice, idiom, cultural reference, time clue, stated place, or other detail points elsewhere, follow that evidence instead of pulling the guess back toward North America.",
+        "Use a familiar Canadian or US location only when the transcript contains no meaningful geographic signal at all. In that truly clue-free case, choose a plausible city or area among places such as Toronto, Vancouver, California, New York, Texas, Florida, or comparable North American locations instead of repeatedly defaulting to the same US city.",
         "Stay balanced, not paranoid: plenty of real humans are also casual, vague, generic, or evasive, so genericness alone is NOT proof of AI. Decide on the overall balance of evidence, and when genuinely on the fence, lean human.",
         "Decide whether THEM was a HUMAN or an AI language model.",
         "If you decide HUMAN: you MUST commit to your single best-guess latitude and longitude, even when unsure — infer a specific real city or area from language, slang, spelling, idioms, cultural or time cues, or any (skeptically treated) stated location, and output that point's coordinates. Never output null coordinates for a human.",
@@ -268,6 +280,7 @@ function buildOpenRouterMessages(messages, persona) {
       role: "system",
       content: [
         "You are in an anonymous one-on-one text chat with a stranger. Treat it as a normal conversation already in progress.",
+        buildUtcClockContext(new Date(), persona?.location),
         "Quietly, in the background, both of you are also trying to figure out whether the other is a human or an AI, and roughly where the other is from — but it is just a chat, not a quiz, an experiment, or a bit to comment on.",
         "Play it naturally while picking up on clues.",
         "You should pay attention to: vocabulary, spelling, slang, interests, cultural references, response style, confidence, and unusual behavior.",
@@ -294,6 +307,59 @@ function buildOpenRouterMessages(messages, persona) {
     },
     ...chat,
   ];
+}
+
+function buildUtcClockContext(now = new Date(), location = null) {
+  const isoTimestamp = now.toISOString();
+  const weekday = UTC_WEEKDAYS[now.getUTCDay()];
+  const date = isoTimestamp.slice(0, 10);
+  const time = isoTimestamp.slice(11, 19);
+  const localClock = buildLocalClockContext(now, location);
+
+  return [
+    "Authoritative server clock context for this request (UTC):",
+    `day of week=${weekday};`,
+    `date=${date};`,
+    `time=${time} UTC;`,
+    `ISO 8601=${isoTimestamp}.`,
+    localClock,
+    "This is background context for the current date and time. If you are pretending to be from somewhere, keep the local time there in mind; the assigned-location clock above already includes daylight-saving rules.",
+  ].filter(Boolean).join(" ");
+}
+
+function buildLocalClockContext(now, location) {
+  if (!location?.city || !location?.country || !location?.timeZone) {
+    return "";
+  }
+
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: location.timeZone,
+        weekday: "long",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      })
+        .formatToParts(now)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+
+    return [
+      `Assigned-location clock context for ${location.city}, ${location.country} (${location.timeZone}):`,
+      `day of week=${parts.weekday};`,
+      `date=${parts.year}-${parts.month}-${parts.day};`,
+      `time=${parts.hour}:${parts.minute}:${parts.second}.`,
+    ].join(" ");
+  } catch (error) {
+    console.warn(`Unable to format AI location time for ${location.timeZone}: ${error.message}`);
+    return "";
+  }
 }
 
 function normalizeAiReply(value) {
