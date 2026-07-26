@@ -112,6 +112,21 @@ test("OpenRouter chat prompts include an internally consistent authoritative UTC
     new RegExp(`time=${torontoClock.hour}:${torontoClock.minute}:${torontoClock.second}\\.`),
   );
   assert.match(systemPrompt, /assigned-location clock above already includes daylight-saving rules/);
+  assert.match(systemPrompt, /High-priority hostility rule:/);
+  assert.match(
+    systemPrompt,
+    /response MUST contain at least one exact word from this harsh-profanity list/,
+  );
+  assert.match(
+    systemPrompt,
+    /\["fuck", "fucking", "shit", "bullshit", "asshole", "dumbass", "bitch", "bastard"\]/,
+  );
+  assert.match(systemPrompt, /Use the chosen word naturally in a sharp insult or dismissal/);
+  assert.match(systemPrompt, /Do not soften words like fuck or shit into mild language/);
+  assert.match(systemPrompt, /do not give a profanity-free response/);
+  assert.match(systemPrompt, /Vary the delivery naturally: the profane response can be a funny clapback/);
+  assert.match(systemPrompt, /Keep the response concise, confident, and genuinely cutting/);
+  assert.doesNotMatch(systemPrompt, /push back and insult them right back/);
   assert.doesNotMatch(systemPrompt, /Sometimes just give a specific believable place/);
   assert.doesNotMatch(systemPrompt, /leaning casual gen z internet style/);
   assert.doesNotMatch(systemPrompt, /When asked for the current date or time/);
