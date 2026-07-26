@@ -40,6 +40,9 @@ test("human session ownership transfers atomically without disconnecting the old
     [partnerSocket.id, partnerSocket],
   ]);
   const armedSessions = [];
+  const pendingGuess = { identityGuess: "Human", locationPlaceStatus: "pending" };
+  const pendingResult = { guess: { locationPlaceStatus: "pending" } };
+  const pendingPlacePromise = Promise.resolve();
   const session = {
     id: "human-session",
     mode: "human",
@@ -48,7 +51,10 @@ test("human session ownership transfers atomically without disconnecting the old
         socketId: oldSocket.id,
         playerId: "player-a",
         disconnected: true,
-        submitted: false,
+        submitted: true,
+        guess: pendingGuess,
+        result: pendingResult,
+        guessPlacePromise: pendingPlacePromise,
       },
       [partnerSocket.id]: {
         socketId: partnerSocket.id,
@@ -86,6 +92,9 @@ test("human session ownership transfers atomically without disconnecting the old
   assert.equal(session.players[oldSocket.id], undefined);
   assert.equal(session.players[newSocket.id].playerId, "player-a");
   assert.equal(session.players[newSocket.id].disconnected, false);
+  assert.equal(session.players[newSocket.id].guess, pendingGuess);
+  assert.equal(session.players[newSocket.id].result, pendingResult);
+  assert.equal(session.players[newSocket.id].guessPlacePromise, pendingPlacePromise);
   assert.equal(session.messages[0].author, newSocket.id);
   assert.equal(session.messages[0].clientMessageId, "client-a");
   assert.equal(session.turnOwner, newSocket.id);

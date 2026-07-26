@@ -20,6 +20,7 @@ import type {
   ChatMessage,
   ChatSendAck,
   GuessErrorPayload,
+  GuessPlace,
   IdentityGuess,
   IpLocation,
   ModelFamily,
@@ -972,6 +973,53 @@ function GameApp() {
               opponentPending: false,
             }
           : current);
+      },
+    );
+
+    socket.on(
+      "guess:place",
+      (payload: {
+        sessionId: string;
+        target: "self" | "opponent";
+        status: "resolved" | "unavailable";
+        place: GuessPlace | null;
+      }) => {
+        if (!isCurrentSessionEvent(socket, generation, payload)) {
+          return;
+        }
+
+        setResult((current) => {
+          if (!current) {
+            return current;
+          }
+
+          const placeUpdate = {
+            locationPlace: payload.place,
+            locationPlaceStatus: payload.status,
+          } as const;
+
+          if (payload.target === "self") {
+            return {
+              ...current,
+              guess: {
+                ...current.guess,
+                ...placeUpdate,
+              },
+            };
+          }
+
+          if (!current.opponentGuess) {
+            return current;
+          }
+
+          return {
+            ...current,
+            opponentGuess: {
+              ...current.opponentGuess,
+              ...placeUpdate,
+            },
+          };
+        });
       },
     );
 

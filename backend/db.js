@@ -77,6 +77,16 @@ async function initDb() {
   // The AI opponent (unlike a human) explains its read of you; humans store null.
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_explanation TEXT`);
 
+  // Resolved place metadata for both sides' committed location pins. Coordinates
+  // remain separate so the map can be reconstructed while the concise JSON place
+  // label can be preferred in history. Existing rows naturally remain null.
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS guess_location_lat DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS guess_location_lng DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS guess_place JSONB`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_guess_location_lat DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_guess_location_lng DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_guess_place JSONB`);
+
   // Supports the admin's newest-first paginated sweep across every player.
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_game_history_played_at
@@ -92,15 +102,22 @@ async function saveGameHistory(record) {
   }
 
   const transcript = Array.isArray(record.transcript) ? record.transcript : [];
+  const guessLocation = normalizeHistoryLocation(record.guessLocation);
+  const guessPlace = normalizeHistoryPlace(record.guessPlace);
+  const opponentGuessLocation = normalizeHistoryLocation(record.opponentGuessLocation);
+  const opponentGuessPlace = normalizeHistoryPlace(record.opponentGuessPlace);
 
   await pool.query(
     `INSERT INTO game_history (
        player_id, session_id, opponent_type, identity_guess, correct_identity,
        read_earned, read_possible, round_type, round_earned, round_possible,
        distance_km, model_family, model_family_guess, actual_region, actual_country,
+       guess_location_lat, guess_location_lng, guess_place,
        opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
-       opponent_model_family_guess, opponent_explanation, transcript, message_count
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+       opponent_model_family_guess, opponent_explanation,
+       opponent_guess_location_lat, opponent_guess_location_lng, opponent_guess_place,
+       transcript, message_count
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
      ON CONFLICT (player_id, session_id) DO NOTHING`,
     [
       record.playerId,
@@ -118,11 +135,17 @@ async function saveGameHistory(record) {
       record.modelFamilyGuess ?? null,
       record.actualRegion,
       record.actualCountry,
+      guessLocation?.lat ?? null,
+      guessLocation?.lng ?? null,
+      guessPlace ? JSON.stringify(guessPlace) : null,
       record.opponentIdentityGuess ?? null,
       record.opponentCorrectIdentity ?? null,
       record.opponentDistanceKm ?? null,
       record.opponentModelFamilyGuess ?? null,
       record.opponentExplanation ?? null,
+      opponentGuessLocation?.lat ?? null,
+      opponentGuessLocation?.lng ?? null,
+      opponentGuessPlace ? JSON.stringify(opponentGuessPlace) : null,
       JSON.stringify(transcript),
       transcript.length,
     ],
@@ -134,8 +157,11 @@ async function saveGameHistory(record) {
 const HISTORY_COLUMNS = `player_id, session_id, played_at, opponent_type, identity_guess, correct_identity,
             read_earned, read_possible, round_type, round_earned, round_possible,
             distance_km, model_family, model_family_guess, actual_region, actual_country,
+            guess_location_lat, guess_location_lng, guess_place,
             opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
-            opponent_model_family_guess, opponent_explanation, transcript, message_count`;
+            opponent_model_family_guess, opponent_explanation,
+            opponent_guess_location_lat, opponent_guess_location_lng, opponent_guess_place,
+            transcript, message_count`;
 
 // Shared row -> entry mapping so the player and admin views stay in sync.
 function mapHistoryRow(row, { includePlayerId = false } = {}) {
@@ -155,11 +181,21 @@ function mapHistoryRow(row, { includePlayerId = false } = {}) {
     modelFamilyGuess: row.model_family_guess,
     actualRegion: row.actual_region,
     actualCountry: row.actual_country,
+    guessLocation: normalizeHistoryLocation({
+      lat: row.guess_location_lat,
+      lng: row.guess_location_lng,
+    }),
+    guessPlace: normalizeHistoryPlace(row.guess_place),
     opponentIdentityGuess: row.opponent_identity_guess,
     opponentCorrectIdentity: row.opponent_correct_identity,
     opponentDistanceKm: row.opponent_distance_km === null ? null : Number(row.opponent_distance_km),
     opponentModelFamilyGuess: row.opponent_model_family_guess,
     opponentExplanation: row.opponent_explanation,
+    opponentGuessLocation: normalizeHistoryLocation({
+      lat: row.opponent_guess_location_lat,
+      lng: row.opponent_guess_location_lng,
+    }),
+    opponentGuessPlace: normalizeHistoryPlace(row.opponent_guess_place),
     messageCount: row.message_count === null ? 0 : Number(row.message_count),
     transcript: Array.isArray(row.transcript) ? row.transcript : [],
   };
@@ -240,6 +276,78 @@ async function getLeaderboardSeed() {
     games: Number(row.games),
     readSum: Number(row.read_sum),
   }));
+}
+
+function normalizeHistoryLocation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const lat = normalizeCoordinate(value.lat, -90, 90);
+  const lng = normalizeCoordinate(value.lng, -180, 180);
+
+  return lat === null || lng === null ? null : { lat, lng };
+}
+
+function normalizeCoordinate(value, min, max) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
+function normalizeHistoryPlace(value) {
+  let place = value;
+
+  if (typeof place === "string") {
+    try {
+      place = JSON.parse(place);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!place || typeof place !== "object" || Array.isArray(place)) {
+    return null;
+  }
+
+  const city = normalizePlaceText(place.city ?? place.locality, 160);
+  const region = normalizePlaceText(place.region, 160);
+  const country = normalizePlaceText(place.country, 160);
+  const countryCode = normalizeCountryCode(place.countryCode);
+  const label = normalizePlaceText(place.label, 320);
+
+  if (!label) {
+    return null;
+  }
+
+  return Object.fromEntries(
+    Object.entries({
+      label,
+      city,
+      region,
+      country,
+      countryCode,
+    }).filter(([, component]) => component !== null),
+  );
+}
+
+function normalizePlaceText(value, maxLength) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return text || null;
+}
+
+function normalizeCountryCode(value) {
+  const code = normalizePlaceText(value, 3);
+
+  return code && /^[a-z]{2,3}$/i.test(code) ? code.toUpperCase() : null;
 }
 
 module.exports = {

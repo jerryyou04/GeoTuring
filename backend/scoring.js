@@ -82,6 +82,12 @@ function buildScoreResult({ session, guess, actualParticipant }) {
     guess: {
       identityGuess,
       locationGuess: guess.locationGuess,
+      locationPlace: guess.locationPlace || null,
+      locationPlaceStatus: guess.locationPlaceStatus === "pending"
+        ? "pending"
+        : guess.locationPlaceStatus === "resolved" && guess.locationPlace
+          ? "resolved"
+          : "unavailable",
       modelFamilyGuess: guess.modelFamilyGuess,
       submitted: Boolean(guess.submitted),
     },
@@ -116,7 +122,7 @@ function buildExplanation(participant, correctIdentity, distanceKm) {
     const locationText =
       distanceKm === null
         ? "Your location score is 0/1 because no valid human-location comparison was available."
-        : `Your location score is out of 1, based on a pin ${Math.round(distanceKm)} km from ${place}.`;
+        : `Your location score is out of 1, based on how close your pin was to ${place}.`;
 
     return `${correctIdentity ? "You called the identity correctly." : "The identity read was off."} ${locationText}`;
   }

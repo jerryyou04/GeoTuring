@@ -91,7 +91,7 @@ export function ChatRoom({
       ? "Turn time expired..."
       : isPlayerTurn
         ? "Ask something revealing..."
-        : "Waiting for their message...";
+        : "Type while you wait...";
   const expiredMessage = roundExpired
     ? "Round time expired."
     : "Turn time expired.";
@@ -214,7 +214,7 @@ export function ChatRoom({
           <form className="composer" onSubmit={onSend}>
             <input
               ref={inputRef}
-              disabled={!isPlayerTurn || timerExpired}
+              disabled={timerExpired}
               maxLength={400}
               value={draft}
               onChange={(event) => onDraft(event.target.value)}

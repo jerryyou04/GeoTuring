@@ -53,6 +53,22 @@ Backend:
 - `OPENROUTER_MODEL_CHATGPT`, `OPENROUTER_MODEL_GEMINI`,
   `OPENROUTER_MODEL_CLAUDE`, `OPENROUTER_MODEL_GROK` - optional model slug
   overrides for each in-game AI family.
+- `GEOAPIFY_API_KEY` - optional server-side key for managed reverse geocoding of
+  location guesses. When unset, the backend uses the public OpenStreetMap
+  Nominatim endpoint with caching and a global one-request-per-second limit.
+- `GEOCODING_BASE_URL` - optional reverse-geocoding endpoint override for the
+  selected provider.
+- `GEOCODING_USER_AGENT` - identifying application User-Agent sent to the
+  geocoder. Set this to an application name and contact URL/email when using
+  public Nominatim; it defaults to an identifying GeoTuring User-Agent.
+- `GEOCODING_TIMEOUT_MS` - optional end-to-end lookup timeout in milliseconds,
+  including any public-provider rate-limit wait (default `2500`).
+- `GEOCODING_CACHE_MAX_ENTRIES`, `GEOCODING_CACHE_GRID_DEGREES`,
+  `GEOCODING_CACHE_TTL_MS`, and `GEOCODING_UNAVAILABLE_CACHE_TTL_MS` - optional
+  in-memory reverse-geocode cache tuning.
+- `GEOCODING_MAX_RESULT_DISTANCE_KM` - optional cutoff used when a provider
+  supplies enough distance information to detect an implausible nearest-land
+  result (default `100`).
 
 Frontend:
 
@@ -95,6 +111,8 @@ Backend service:
 - Start command: `npm start`
 - Set `FRONTEND_URL=https://geoturing.com`
 - Set `OPENROUTER_API_KEY` to the backend service variable in Railway.
+- For production reverse-geocoding volume, set `GEOAPIFY_API_KEY`. Without it,
+  the low-volume Nominatim fallback remains functional and rate-limited.
 - Railway should route `api.geoturing.com` to this service.
 
 Frontend service:
@@ -118,6 +136,16 @@ Frontend service:
   `{ "password": "..." }`
 - `GET /admin/host-monitor/rooms` - authenticated room, queue, and
   transcript snapshot
+
+## Reverse-Geocoding Attribution
+
+Guess coordinates are reverse-geocoded by the backend into concise place names;
+provider credentials never belong in the frontend. Without `GEOAPIFY_API_KEY`,
+the fallback uses Nominatim and OpenStreetMap data. Keep visible
+[OpenStreetMap attribution](https://www.openstreetmap.org/copyright) anywhere
+those labels or map data are presented, retain the identifying User-Agent, and
+respect the public Nominatim usage limits. If Geoapify is enabled, also follow
+the attribution and quota requirements of the selected Geoapify plan.
 
 ## Admin Room Monitor
 

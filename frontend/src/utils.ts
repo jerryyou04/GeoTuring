@@ -1,4 +1,11 @@
-import type { AdminLocation, ChatMessage, GameHistoryEntry, IpLocation, MessageCounts } from "./types";
+import type {
+  AdminLocation,
+  ChatMessage,
+  GameHistoryEntry,
+  GuessPlace,
+  IpLocation,
+  MessageCounts,
+} from "./types";
 
 export function formatSeconds(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -57,9 +64,28 @@ export function formatDetail(game: GameHistoryEntry) {
   }
 
   const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ");
-  const distance = game.distanceKm === null ? null : `${game.distanceKm.toLocaleString()} km off`;
+  const guessedPlace = formatGuessPlace(game.guessPlace);
+
+  if (guessedPlace) {
+    return [`Guessed ${guessedPlace}`, place ? `actual ${place}` : ""].filter(Boolean).join(" · ");
+  }
+
+  const distance = typeof game.distanceKm === "number" ? `${game.distanceKm.toLocaleString()} km off` : null;
 
   return [place, distance].filter(Boolean).join(" · ") || "Human opponent";
+}
+
+export function formatGuessPlace(place?: GuessPlace | null) {
+  const label = typeof place?.label === "string" ? place.label.trim() : "";
+
+  if (label) {
+    return label;
+  }
+
+  return [place?.city, place?.region, place?.country]
+    .filter((part): part is string => typeof part === "string" && Boolean(part.trim()))
+    .map((part) => part.trim())
+    .join(", ");
 }
 
 export function shortSocketId(socketId: string) {

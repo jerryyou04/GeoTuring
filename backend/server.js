@@ -57,6 +57,7 @@ const {
 } = require("./socketOwnership");
 const { registerAdminRoutes } = require("./admin");
 const { createLeaderboardHandler } = require("./leaderboard");
+const { resolveGuessPlace } = require("./geocoding");
 const { createQueueService } = require("./queue");
 const db = require("./db");
 const redis = require("./redis");
@@ -158,12 +159,24 @@ function persistResultHistory(playerId, result, transcript = [], opponent = null
       distanceKm: result.distanceKm ?? null,
       modelFamily: result.actual?.modelFamily || null,
       modelFamilyGuess: result.guess?.modelFamilyGuess || null,
+      guessLocation: result.guess?.identityGuess === "Human"
+        ? result.guess?.locationGuess || null
+        : null,
+      guessPlace: result.guess?.identityGuess === "Human"
+        ? result.guess?.locationPlace || null
+        : null,
       actualRegion: result.actual?.region || null,
       actualCountry: result.actual?.country || null,
       opponentIdentityGuess: opponent?.identityGuess ?? null,
       opponentCorrectIdentity: opponent?.correctIdentity ?? null,
       opponentDistanceKm: opponent?.distanceKm ?? null,
       opponentModelFamilyGuess: opponent?.modelFamilyGuess ?? null,
+      opponentGuessLocation: opponent?.identityGuess === "Human"
+        ? opponent?.locationGuess || null
+        : null,
+      opponentGuessPlace: opponent?.identityGuess === "Human"
+        ? opponent?.locationPlace || null
+        : null,
       opponentExplanation: opponent?.explanation ?? null,
       transcript,
     })
@@ -218,6 +231,8 @@ function buildOpponentGuessRecord(session, socketId) {
     correctIdentity,
     distanceKm,
     modelFamilyGuess: identityGuess === "AI" ? guess.modelFamilyGuess || null : null,
+    locationGuess: identityGuess === "Human" ? guess.locationGuess || null : null,
+    locationPlace: identityGuess === "Human" ? guess.locationPlace || null : null,
   };
 }
 
@@ -229,20 +244,138 @@ function persistHumanGameHistory(session) {
   }
 
   session.historyPersisted = true;
+  const placePromises = Object.values(session.players)
+    .map((player) => player.guessPlacePromise)
+    .filter(Boolean);
 
-  Object.keys(session.players).forEach((socketId) => {
-    const player = session.players[socketId];
+  Promise.allSettled(placePromises).then(() => {
+    Object.keys(session.players).forEach((socketId) => {
+      const player = session.players[socketId];
 
-    if (!player.result) {
+      if (!player.result) {
+        return;
+      }
+
+      persistResultHistory(
+        player.playerId,
+        player.result,
+        buildStoredTranscript(session, socketId),
+        buildOpponentGuessRecord(session, socketId),
+      );
+    });
+  });
+}
+
+function hasResolvableLocationGuess(guess) {
+  return guess?.identityGuess === "Human" &&
+    Number.isFinite(guess.locationGuess?.lat) &&
+    Number.isFinite(guess.locationGuess?.lng);
+}
+
+function applyGuessPlaceResolution(guess, result, resolution) {
+  const resolved = resolution?.status === "resolved" && resolution.place;
+  const status = resolved ? "resolved" : "unavailable";
+  const place = resolved ? resolution.place : null;
+
+  guess.locationPlace = place;
+  guess.locationPlaceStatus = status;
+
+  if (result?.guess) {
+    result.guess.locationPlace = place;
+    result.guess.locationPlaceStatus = status;
+  }
+
+  return { status, place };
+}
+
+function startGuessPlaceResolution(guess, result, onResolved) {
+  if (!hasResolvableLocationGuess(guess)) {
+    applyGuessPlaceResolution(guess, result, { status: "unavailable", place: null });
+    return null;
+  }
+
+  guess.locationPlace = null;
+  guess.locationPlaceStatus = "pending";
+
+  if (result?.guess) {
+    result.guess.locationPlace = null;
+    result.guess.locationPlaceStatus = "pending";
+  }
+
+  return Promise.resolve()
+    .then(() => resolveGuessPlace(guess.locationGuess))
+    .catch((error) => {
+      console.warn(`Guess reverse geocoding failed: ${error.message}`);
+      return { status: "unavailable", place: null };
+    })
+    .then((resolution) => {
+      const normalized = applyGuessPlaceResolution(guess, result, resolution);
+
+      if (typeof onResolved === "function") {
+        onResolved(normalized);
+      }
+
+      return normalized;
+    });
+}
+
+function emitGuessPlacePatch(socketId, sessionId, target, resolution) {
+  if (!socketId) {
+    return;
+  }
+
+  io.to(socketId).emit("guess:place", {
+    sessionId,
+    target,
+    status: resolution.status,
+    place: resolution.place,
+  });
+}
+
+function startHumanGuessPlaceResolution(session, socketId) {
+  const player = session.players[socketId];
+
+  if (!player?.guess) {
+    return null;
+  }
+
+  // Socket ids are replaceable on reconnect. Capture the stable player id and
+  // resolve their current socket only when the geocoder finishes.
+  const playerId = player.playerId;
+
+  return startGuessPlaceResolution(player.guess, player.result, (resolution) => {
+    const currentSocketId = Object.keys(session.players).find(
+      (candidateId) => session.players[candidateId].playerId === playerId,
+    );
+
+    if (!currentSocketId) {
       return;
     }
 
-    persistResultHistory(
-      player.playerId,
-      player.result,
-      buildStoredTranscript(session, socketId),
-      buildOpponentGuessRecord(session, socketId),
-    );
+    emitGuessPlacePatch(currentSocketId, session.id, "self", resolution);
+
+    const partnerSocketId = getHumanPartnerSocketId(session, currentSocketId);
+    const partner = partnerSocketId ? session.players[partnerSocketId] : null;
+
+    if (partner?.submitted) {
+      emitGuessPlacePatch(partnerSocketId, session.id, "opponent", resolution);
+    }
+  });
+}
+
+function startAiPlayerGuessPlaceResolution(session) {
+  return startGuessPlaceResolution(session.guess, session.result, (resolution) => {
+    emitGuessPlacePatch(session.playerSocketId, session.id, "self", resolution);
+  });
+}
+
+function startAiOpponentGuessPlaceResolution(session, resolvedGuess) {
+  if (!resolvedGuess || resolvedGuess.failed || !resolvedGuess.guess) {
+    return null;
+  }
+
+  return startGuessPlaceResolution(resolvedGuess.guess, null, (resolution) => {
+    emitGuessPlacePatch(session.playerSocketId, session.id, "opponent", resolution);
   });
 }
 
@@ -281,6 +414,7 @@ function startAiOpponentGuess(session) {
       session.aiGuess = { failed: true };
     } else if (!session.aiGuessExpired && !session.aiFinalized) {
       session.aiGuess = resolvedGuess;
+      session.aiGuessPlacePromise = startAiOpponentGuessPlaceResolution(session, resolvedGuess);
     }
 
     return session.aiGuess;
@@ -363,6 +497,8 @@ function buildAiOpponentRecord(session) {
     correctIdentity: identityGuess === "Human", // the player really is human
     distanceKm,
     modelFamilyGuess: identityGuess === "AI" ? guess.modelFamilyGuess || null : null,
+    locationGuess: identityGuess === "Human" ? guess.locationGuess || null : null,
+    locationPlace: identityGuess === "Human" ? guess.locationPlace || null : null,
     explanation: resolved.explanation || null,
   };
 }
@@ -439,12 +575,19 @@ function completeAiSession(session) {
   }
 
   session.aiFinalized = true;
-  persistResultHistory(
-    session.playerId,
-    session.result,
-    buildStoredTranscript(session, session.playerSocketId),
-    buildAiOpponentRecord(session),
-  );
+  const placePromises = [
+    session.playerGuessPlacePromise,
+    session.aiGuessPlacePromise,
+  ].filter(Boolean);
+
+  Promise.allSettled(placePromises).then(() => {
+    persistResultHistory(
+      session.playerId,
+      session.result,
+      buildStoredTranscript(session, session.playerSocketId),
+      buildAiOpponentRecord(session),
+    );
+  });
 
   retainCompletedSession(session);
 }
@@ -826,6 +969,7 @@ function handleGuessSubmit(socket, payload = {}) {
     player.guess = sanitizeSubmittedGuess(payload);
     player.result = scoreHumanGuess(session, socket.id, player.guess);
     markSubmitted(session, socket.id);
+    player.guessPlacePromise = startHumanGuessPlaceResolution(session, socket.id);
 
     const partnerSocketId = getHumanPartnerSocketId(session, socket.id);
     const partner = partnerSocketId ? session.players[partnerSocketId] : null;
@@ -857,6 +1001,7 @@ function handleGuessSubmit(socket, payload = {}) {
   session.guess = sanitizeSubmittedGuess(payload);
   session.result = scoreAiGuess(session, session.guess);
   session.submitted = true;
+  session.playerGuessPlacePromise = startAiPlayerGuessPlaceResolution(session);
   finalizeAiSession(session);
 }
 

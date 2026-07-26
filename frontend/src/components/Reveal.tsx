@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import type { Pin, ResultPayload, SubmittedGuess } from "../types";
+import { formatGuessPlace } from "../utils";
 
 const CORRECT_MARKER = createRevealMarker("correct");
 const GUESS_MARKER = createRevealMarker("guess");
@@ -42,7 +43,7 @@ export function Reveal({
         />
         <ScoreRow
           label={isHumanRound ? "Location" : "Model"}
-          note={isHumanRound ? getDistanceSummary(result.distanceKm) : "Exact model-family match."}
+          note={isHumanRound ? getLocationScoreSummary(result.guess, result.distanceKm) : "Exact model-family match."}
           tone={scoreTone(result.score.round.earned, result.score.round.possible)}
           value={`${result.score.round.earned}/${result.score.round.possible}`}
         />
@@ -87,7 +88,7 @@ function HumanReveal({ result, serverClockOffsetMs }: { result: ResultPayload; s
         correctLabel="Correct rough location"
         correctPin={actualPin}
         detail={guessedHuman ? "Compare your pin with the correct rough location." : "You guessed AI, so this shows the human location you missed."}
-        guessLabel="Your pin"
+        guessLabel={getMapGuessLabel(result.guess, "Your guess", result.distanceKm)}
         guessPin={yourGuessPin}
         title={guessedHuman ? "Your location guess" : "Correct human location"}
       />
@@ -99,7 +100,11 @@ function HumanReveal({ result, serverClockOffsetMs }: { result: ResultPayload; s
             correctLabel="Your rough location"
             correctPin={opponentActualPin}
             detail={opponentGuess.locationGuess ? "They guessed your rough location." : "They picked human but placed no pin."}
-            guessLabel="Their pin"
+            guessLabel={getMapGuessLabel(
+              opponentGuess,
+              "Their guess",
+              getPinDistanceKm(opponentGuess.locationGuess, opponentActualPin),
+            )}
             guessPin={opponentGuess.locationGuess}
             title="Opponent location guess"
           />
@@ -145,7 +150,7 @@ function AiReveal({ result, serverClockOffsetMs }: { result: ResultPayload; serv
           correctLabel="Correct location"
           correctPin={null}
           detail="This is where your location read landed. An AI opponent has no correct location pin."
-          guessLabel="Your pin"
+          guessLabel={getMapGuessLabel(result.guess, "Your guess", null)}
           guessPin={mapRead}
           missingCorrectLabel="No correct pin — opponent was AI"
           title="Your map read"
@@ -187,7 +192,11 @@ function AiOpponentRead({ result, serverClockOffsetMs }: { result: ResultPayload
                 ? "The AI pegged you as human and guessed where you're from."
                 : "The AI pegged you as human but placed no pin."
             }
-            guessLabel="AI's pin"
+            guessLabel={getMapGuessLabel(
+              opponentGuess,
+              "AI guessed",
+              getPinDistanceKm(opponentGuess.locationGuess, opponentActualPin),
+            )}
             guessPin={opponentGuess.locationGuess}
             title="It read you as human ✓"
           />
@@ -438,8 +447,61 @@ function getResultSummary(result: ResultPayload) {
   return `You were speaking with ${result.actual.modelFamily || "an AI model"}.`;
 }
 
-function getDistanceSummary(distanceKm: number | null) {
-  return distanceKm === null ? "No scored location pin." : `${distanceKm.toLocaleString()} km from the correct rough location.`;
+function getLocationScoreSummary(guess: SubmittedGuess, distanceKm: number | null) {
+  if (!guess.locationGuess) {
+    return "No scored location pin.";
+  }
+
+  const place = formatGuessPlace(guess.locationPlace);
+
+  if (place) {
+    return `Guessed ${place}.`;
+  }
+
+  if (guess.locationPlaceStatus === "pending") {
+    return "Resolving pinned location…";
+  }
+
+  return distanceKm === null
+    ? "Pinned location unavailable."
+    : `${distanceKm.toLocaleString()} km from the correct rough location.`;
+}
+
+function getMapGuessLabel(guess: SubmittedGuess, prefix: string, distanceKm: number | null) {
+  const place = formatGuessPlace(guess.locationPlace);
+
+  if (place) {
+    return `${prefix}: ${place}`;
+  }
+
+  if (guess.locationPlaceStatus === "pending") {
+    return "Resolving pinned location…";
+  }
+
+  return distanceKm === null
+    ? `${prefix}: pinned location unavailable`
+    : `${prefix}: ${distanceKm.toLocaleString()} km off`;
+}
+
+function getPinDistanceKm(first: Pin | null, second: Pin | null) {
+  if (!first || !second) {
+    return null;
+  }
+
+  const earthRadiusKm = 6371;
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const latDelta = toRadians(second.lat - first.lat);
+  const lngDelta = toRadians(second.lng - first.lng);
+  const firstLat = toRadians(first.lat);
+  const secondLat = toRadians(second.lat);
+  const haversine =
+    Math.sin(latDelta / 2) ** 2 +
+    Math.cos(firstLat) * Math.cos(secondLat) * Math.sin(lngDelta / 2) ** 2;
+  const clampedHaversine = Math.min(1, Math.max(0, haversine));
+
+  return Math.round(
+    earthRadiusKm * 2 * Math.atan2(Math.sqrt(clampedHaversine), Math.sqrt(1 - clampedHaversine)),
+  );
 }
 
 function formatIdentity(value: string | null) {

@@ -101,12 +101,7 @@ export interface ResultPayload {
     };
   };
   distanceKm: number | null;
-  guess: {
-    identityGuess: IdentityGuess | null;
-    locationGuess: Pin | null;
-    modelFamilyGuess: ModelFamily | null;
-    submitted: boolean;
-  };
+  guess: SubmittedGuess;
   opponentGuess: SubmittedGuess | null;
   opponentExplanation?: string | null;
   opponentPending?: boolean;
@@ -133,6 +128,8 @@ export interface ResultPayload {
 export interface SubmittedGuess {
   identityGuess: IdentityGuess | null;
   locationGuess: Pin | null;
+  locationPlace?: GuessPlace | null;
+  locationPlaceStatus?: "pending" | "resolved" | "unavailable";
   modelFamilyGuess: ModelFamily | null;
   submitted: boolean;
 }
@@ -140,6 +137,14 @@ export interface SubmittedGuess {
 export interface Pin {
   lat: number;
   lng: number;
+}
+
+export interface GuessPlace {
+  label: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  countryCode?: string;
 }
 
 export interface StoredTranscriptMessage {
@@ -161,6 +166,8 @@ export interface GameHistoryEntry {
   roundEarned: number;
   roundPossible: number;
   distanceKm: number | null;
+  guessLocation: Pin | null;
+  guessPlace: GuessPlace | null;
   modelFamily: ModelFamily | null;
   modelFamilyGuess: ModelFamily | null;
   actualRegion: string | null;
@@ -168,6 +175,8 @@ export interface GameHistoryEntry {
   opponentIdentityGuess: IdentityGuess | null;
   opponentCorrectIdentity: boolean | null;
   opponentDistanceKm: number | null;
+  opponentGuessLocation: Pin | null;
+  opponentGuessPlace: GuessPlace | null;
   opponentModelFamilyGuess: ModelFamily | null;
   opponentExplanation: string | null;
   messageCount?: number;

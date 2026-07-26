@@ -1,5 +1,6 @@
 import React from "react";
 import type { GameHistoryEntry } from "../types";
+import { formatGuessPlace } from "../utils";
 
 export type RoundStatus = "correct" | "partial" | "wrong";
 
@@ -66,12 +67,19 @@ function describeYourSecondGuess(game: GameHistoryEntry) {
   }
 
   const place = [game.actualRegion, game.actualCountry].filter(Boolean).join(", ") || "their location";
+  const guessedPlace = formatGuessPlace(game.guessPlace);
 
-  if (game.distanceKm === null) {
-    return `No location pin placed — they were in ${place}.`;
+  if (guessedPlace) {
+    return `Guessed ${guessedPlace}; they were in ${place}.`;
   }
 
-  return `Pinned ${game.distanceKm.toLocaleString()} km from ${place}.`;
+  if (typeof game.distanceKm === "number") {
+    return `Pinned ${game.distanceKm.toLocaleString()} km from ${place}.`;
+  }
+
+  return game.guessLocation
+    ? `The pinned location could not be resolved — they were in ${place}.`
+    : `No location pin placed — they were in ${place}.`;
 }
 
 function describeOpponentRead(game: GameHistoryEntry) {
@@ -84,11 +92,16 @@ function describeOpponentRead(game: GameHistoryEntry) {
     : `Thought you were ${game.opponentIdentityGuess} ✗`;
 
   if (game.opponentIdentityGuess === "Human") {
-    const distance = game.opponentDistanceKm === null
-      ? "no location pin"
-      : `${game.opponentDistanceKm.toLocaleString()} km off`;
+    const guessedPlace = formatGuessPlace(game.opponentGuessPlace);
+    const locationRead = guessedPlace
+      ? `guessed ${guessedPlace}`
+      : typeof game.opponentDistanceKm === "number"
+        ? `${game.opponentDistanceKm.toLocaleString()} km off`
+        : game.opponentGuessLocation
+          ? "pinned location unavailable"
+          : "no location pin";
 
-    return `${identity} · ${distance}`;
+    return `${identity} · ${locationRead}`;
   }
 
   return game.opponentModelFamilyGuess
