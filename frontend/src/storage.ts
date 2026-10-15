@@ -24,11 +24,15 @@ export function loadPersistentScore(): PersistentScore {
     }
 
     const parsed = JSON.parse(raw) as Partial<PersistentScore>;
+    const humanEarned = parsed.humanEarned;
 
     return {
       readEarned: toScoreNumber(parsed.readEarned),
       readPossible: toScoreNumber(parsed.readPossible),
-      humanEarned: toScoreNumber(parsed.humanEarned),
+      // Location points are fractional; the other fields are whole counters.
+      humanEarned: typeof humanEarned === "number" && Number.isFinite(humanEarned) && humanEarned > 0
+        ? Number(humanEarned.toFixed(1))
+        : 0,
       humanPossible: toScoreNumber(parsed.humanPossible),
       aiEarned: toScoreNumber(parsed.aiEarned),
       aiPossible: toScoreNumber(parsed.aiPossible),

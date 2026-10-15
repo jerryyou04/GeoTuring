@@ -51,6 +51,19 @@ canned AI replies and does not connect to Postgres, Redis, or OpenRouter.
 `npm start` and `npm run dev` retain the regular production storage behavior;
 `dev:mock` refuses to run with `NODE_ENV=production` or in Railway.
 
+## Regression Testing
+
+Run `npm test` in `frontend` for the scoreboard persistence regression tests,
+`npm run build` there for the production bundle, and `npm test` in `backend`
+for the existing server suite.
+
+For deliberate live two-player checks, use two isolated browser profiles. If
+only one profile is available, `npm run test:production-proxy` in `frontend`
+serves the deployed frontend unchanged on a fresh loopback origin; it still
+connects to the production backend. Playing through that page creates real
+production games. See the [production E2E report](docs/qa/production-e2e-2026-10-14.md)
+for the paired-player procedure, verified cases, and known limitations.
+
 ## Environment Variables
 
 Backend:

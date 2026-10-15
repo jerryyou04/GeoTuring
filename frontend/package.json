@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test test/storage.test.mjs",
+    "test:production-proxy": "node test/production-proxy.cjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "start": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
