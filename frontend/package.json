@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/storage.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "test:production-proxy": "node test/production-proxy.cjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",

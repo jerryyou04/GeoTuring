@@ -14,7 +14,7 @@ export function Sidebar({ active, newGameAction, footer }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img className="brandMark" src="/geoturing-logo.png" alt="" />
+        <img className="brandMark" src="/geoturing-logo.svg" alt="" width="32" height="32" />
         <strong>GeoTuring</strong>
       </div>
       <nav className="sidebarNav" aria-label="Main navigation">

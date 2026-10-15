@@ -20,9 +20,9 @@ function createDemoHistory(playerId, now) {
     { guessLocation: { lat: 43.6532, lng: -79.3832 }, actualLocation: { lat: 44.2377, lng: -79.3832 }, opponentGuessLocation: { lat: 45.5019, lng: -73.5674 }, opponentActualLocation: { lat: 45.4215, lng: -75.6972 } },
     { opponentGuessLocation: { lat: 45.5019, lng: -73.5674 }, opponentActualLocation: { lat: 45.4215, lng: -75.6972 }, opponentDistanceKm: 166 },
     { actualLocation: { lat: 52.52, lng: 13.405 }, opponentActualLocation: { lat: 45.4215, lng: -75.6972 } },
-    {},
+    { guessLocation: { lat: -33.8688, lng: 151.2093 }, opponentGuessLocation: { lat: 45.5019, lng: -73.5674 }, opponentActualLocation: { lat: 45.4215, lng: -75.6972 }, opponentDistanceKm: 166 },
     { guessLocation: { lat: 45.5019, lng: -73.5674 }, actualLocation: { lat: 49.2827, lng: -123.1207 }, opponentGuessLocation: { lat: 40.7128, lng: -74.006 }, opponentActualLocation: { lat: 45.4215, lng: -75.6972 } },
-    {},
+    { opponentActualLocation: { lat: 45.4215, lng: -75.6972 } },
   ];
   return rounds.map((round, index) => {
     const playedAt = now - (index + 1) * 45 * 60 * 1000;

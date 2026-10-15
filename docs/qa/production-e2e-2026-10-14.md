@@ -25,9 +25,11 @@ Cause: `loadPersistentScore()` used the whole-counter `toScoreNumber()` normaliz
 
 **Fixed locally:** preserve finite nonnegative human points at the game's one-decimal precision; retain the existing integer-counter handling for other fields. The new tests failed before the fix and pass afterward. This change has not been deployed, so production still has this issue.
 
-### The www hostname does not resolve
+### The www hostname did not resolve during the initial pass — resolved on recheck
 
 `https://www.geoturing.com` failed with `ERR_NAME_NOT_RESOLVED`; `https://geoturing.com` worked. DNS/hosting configuration was not changed. This is an additional operational finding, not evidence that the frontend redesign caused it.
+
+On the later October 14 recheck, www worked and redirected to the apex hostname. See the hostname regression checks below; the earlier DNS failure is no longer a current finding.
 
 ## Live checks
 
@@ -80,7 +82,7 @@ This procedure writes real production game records; it is a deliberate manual ch
 
 - This run establishes two-player behavior in the available browser engine, not Chrome/Edge/Safari compatibility.
 - Authenticated administrator screens were not exercised; only the public login, its invalid-password response, and return navigation were checked. No administrator credentials were supplied or used.
-- Two revealed AI families were exercised. ChatGPT and Claude, provider failover, and the full 135-second conversation deadline were not verified. Public UI observations cannot establish which provider generated each response or diagnose provider-side errors.
+- Three revealed AI families were exercised after the hostname follow-up: Gemini, Grok, and ChatGPT. Claude, provider failover, and the full 135-second conversation deadline were not verified. Public UI observations cannot establish which provider generated each response or diagnose provider-side errors.
 - The score fix requires deployment before it can be verified on the live site.
 
 ## Expanded live QA after the initial pass
@@ -109,6 +111,8 @@ The missing Grok guess is an observed production reliability failure, not proof 
 
 ### History map presentation issues found
 
+**Update:** Both issues below were fixed locally and verified in the [subsequent History map E2E pass](history-map-fixes-e2e-2026-10-14.md). The descriptions below preserve the observed production behavior before that fix. The fix has not been deployed by this task.
+
 - The Gemini round guessed AI / ChatGPT, but expanded History nevertheless displayed “Their guess on the map”, a “no saved pin” legend, and the player's actual location marker. Grok's missing final guess produced the same map. `HistoryMap` enables this perspective from `opponentActualLocation` alone, even when no location guess was made. This is misleading rather than a failed map load.
 - The Grok result displayed the player's wrong Human-location pin, but expanded History omitted that pin. `HistoryMap` only enables the player's perspective when the actual opponent type is Human, discarding the preview for a Human guess against an AI.
 - These presentation issues remain open; no speculative backend or frontend behavior change was made as part of this additional QA pass.
@@ -124,6 +128,20 @@ The missing Grok guess is an observed production reliability failure, not proof 
 | Mobile layouts | Actual 375×812 viewport: inspected matchmaking, live chat, identity/location guessing, result, expanded AI History, Leaderboard, and admin login. No horizontal document overflow; table columns and controls remained usable. The result/guess panel scrolled into view. This desktop viewport emulation does not verify a mobile OS keyboard or touch device. |
 
 Temporary viewport overrides were reset after these checks. Both AI rounds were completed; no game was left active. The production History tab was retained for review. No application code was changed during the follow-up; only this report was expanded.
+
+## www hostname regression check — approximately 9:34–9:36 PM
+
+- `https://www.geoturing.com/` redirected to `https://geoturing.com/`. The existing location consent, Quebec location, reads `2/4`, and AI score `1/2` appeared without setting up a new player.
+- Direct www `/history` and `/leaderboard` visits preserved the path and redirected to the corresponding apex pages. History showed the same four previous rounds, including the full Gemini transcript. Leaderboard loaded successfully with the existing player-name hint.
+- Frontend identity, scores, consent, and location are stored in localStorage. Different hosts would normally have separate stores if both served the app directly. The observed redirect makes both entry URLs run on the same apex origin, so they currently use the same browser store and player identity. API/socket configuration points to `https://api.geoturing.com`; no separate www database is configured in the frontend. Physical database topology was not inspected.
+- Joined normal matchmaking and exchanged a message. During the active conversation, deliberately navigated to the www root. It redirected back, reconnected, and restored both messages, turn ownership, and the remaining timer. Received another opponent reply and sent another message successfully; no duplicate messages appeared.
+- Completed the round: reveal identified ChatGPT; identity/model scores were both `1/1`. The AI returned Human plus a London location guess and explanation. Result finalized normally.
+- Opening www History afterward showed exactly five rounds, retaining all previous four and one new ChatGPT record. Expanded details contained all five messages, explanation, London guess versus Quebec actual location, and a 4,989 km comparison. No browser console errors or warnings were recorded.
+- Observed deployed assets on this check: `index-4aU6fszg.js` and `index-DN-yf6z0.css`. The JavaScript asset differs from the initial run; the earlier fractional-score defect's local fix must be checked against the current deployed bundle before declaring it either deployed or still failing. Existing zeroed browser totals alone cannot establish that.
+- No regression attributable to the www addition was found in these checks. This is scoped browser evidence, not exhaustive browser/device compatibility certification. No app/deployment changes were made. The earlier Grok final-guess failure and two History map presentation issues remain open and were observed before this hostname check.
+- Command-line header retrieval could not connect from the shell environment; the browser navigations above verified the actual working redirect. The HTTP redirect status code was not established.
+
+The current test suite does not contain an automated browser E2E runner: the frontend tests cover storage, and `test:production-proxy` is a manual-test helper. Add repeatable browser assertions for canonical-host/path redirects, active-session restoration, exactly-once History persistence, successful/failed AI final guesses, and both map perspectives. These are coverage gaps rather than passing automated E2E tests.
 
 ## Local verification commands
 

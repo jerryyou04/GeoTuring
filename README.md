@@ -53,7 +53,7 @@ canned AI replies and does not connect to Postgres, Redis, or OpenRouter.
 
 ## Regression Testing
 
-Run `npm test` in `frontend` for the scoreboard persistence regression tests,
+Run `npm test` in `frontend` for the scoreboard persistence and History map regression tests,
 `npm run build` there for the production bundle, and `npm test` in `backend`
 for the existing server suite.
 
@@ -63,6 +63,11 @@ serves the deployed frontend unchanged on a fresh loopback origin; it still
 connects to the production backend. Playing through that page creates real
 production games. See the [production E2E report](docs/qa/production-e2e-2026-10-14.md)
 for the paired-player procedure, verified cases, and known limitations.
+
+The [History map fix verification](docs/qa/history-map-fixes-e2e-2026-10-14.md)
+records the updated frontend's isolated two-player and AI gameplay checks,
+mobile layouts, and shared admin archive checks. These browser checks are
+manual; the component/storage and backend suites run automatically.
 
 ## Environment Variables
 
