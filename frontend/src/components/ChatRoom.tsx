@@ -1,8 +1,9 @@
 import type { FormEvent } from "react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { MIN_MESSAGES_PER_SIDE } from "../config";
 import type { ChatMessage, MessageCounts, TurnStatePayload } from "../types";
 import { formatSeconds } from "../utils";
+import { PanelHeading, RoundTimer } from "./PanelHeading";
 
 export function ChatRoom({
   canRestart,
@@ -11,11 +12,10 @@ export function ChatRoom({
   messages,
   draft,
   endMessage,
-  finalGuessSecondsLeft,
   isEnded,
   isLocked,
   isPlayerTurn,
-  lockedMessage = "Chat locked. Use the final guess beside the chat.",
+  lockedMessage = "Chat locked. Make your final guess.",
   pendingGuessConfirm,
   secondsLeft,
   turnSecondsLeft,
@@ -33,7 +33,6 @@ export function ChatRoom({
   messages: ChatMessage[];
   draft: string;
   endMessage: string;
-  finalGuessSecondsLeft: number;
   isEnded: boolean;
   isLocked: boolean;
   isPlayerTurn: boolean;
@@ -53,16 +52,11 @@ export function ChatRoom({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const followLatestRef = useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const guessHintId = useId();
   const roundExpired = !isEnded && !isLocked && secondsLeft <= 0;
   const turnExpired = !isEnded && !isLocked && turnState.currentTurn !== "paused" && turnSecondsLeft <= 0;
   const timerExpired = roundExpired || turnExpired;
   const canSend = draft.trim().length > 0 && isPlayerTurn && !isEnded && !isLocked && !timerExpired;
-  const guessLabel = canGuess
-    ? "Guess"
-    : `Guess ${Math.min(counts.player, MIN_MESSAGES_PER_SIDE)}/${MIN_MESSAGES_PER_SIDE} ${Math.min(
-      counts.partner,
-      MIN_MESSAGES_PER_SIDE,
-    )}/${MIN_MESSAGES_PER_SIDE}`;
   const turnLabel = roundExpired
     ? "Time up"
     : turnExpired
@@ -76,15 +70,13 @@ export function ChatRoom({
             : "Waiting";
   const turnClockLabel = isEnded
     ? "--"
-    : isLocked
-      ? `${finalGuessSecondsLeft}s`
-      : timerExpired
+    : timerExpired
         ? "0s"
         : turnState.currentTurn === "paused"
           ? "--"
           : `${turnSecondsLeft}s`;
   const showPartnerTyping = !isEnded && !isLocked && turnState.currentTurn === "partner";
-  const roundClockValue = isLocked ? "Locked" : formatSeconds(secondsLeft);
+  const roundClockValue = formatSeconds(secondsLeft);
   const inputPlaceholder = roundExpired
     ? "Round time expired..."
     : turnExpired
@@ -100,7 +92,7 @@ export function ChatRoom({
     const newestMessage = messages[messages.length - 1];
 
     if (followLatestRef.current || newestMessage?.author === "player" || isLocked || isEnded) {
-      scrollMessagesToBottom("smooth");
+      scrollMessagesToBottom();
     }
   }, [isEnded, isLocked, messages, showPartnerTyping]);
 
@@ -122,7 +114,7 @@ export function ChatRoom({
 
       element.scrollTo({
         top: element.scrollHeight,
-        behavior,
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : behavior,
       });
       followLatestRef.current = true;
       setShowJumpToLatest(false);
@@ -144,31 +136,22 @@ export function ChatRoom({
   }
 
   return (
-    <section className="gamePanel chatLayout">
-      <div className="chatHeader">
-        <div>
-          <p className="roundLabel">Anonymous chat</p>
-          <h2>Find the tell.</h2>
+    <section className={`gamePanel chatLayout ${isLocked ? "chatLocked" : ""} ${isEnded ? "chatEnded" : ""}`} aria-label="Conversation">
+      <PanelHeading title="Conversation" actions={
+        isLocked ? <span className="chatReadOnly">Read only</span> : <div className="timerStack">
+          <RoundTimer label="Round" value={isEnded ? "Ended" : roundClockValue} />
+          {!isEnded && <RoundTimer label={turnLabel} value={turnClockLabel} active={isPlayerTurn} urgent={turnSecondsLeft <= 10 && turnState.currentTurn !== "paused"} />}
         </div>
-        <div className="timerStack">
-          <div>
-            <span>{isLocked ? "Chat" : "Round"}</span>
-            <strong>{roundClockValue}</strong>
-          </div>
-          <div className={isPlayerTurn ? "activeTurn" : ""}>
-            <span>{isEnded ? "Ended" : isLocked ? "Guess" : turnLabel}</span>
-            <strong>{turnClockLabel}</strong>
-          </div>
-        </div>
-      </div>
+      } />
 
-      {isEnded && <div className="chatEndedBanner">{endMessage || "This round ended."}</div>}
-      {!isEnded && !isLocked && timerExpired && <div className="chatEndedBanner">{expiredMessage}</div>}
+      {isEnded && <div className="chatEndedBanner" role="status">{endMessage || "This round ended."}</div>}
+      {!isEnded && !isLocked && timerExpired && <div className="chatEndedBanner" role="status">{expiredMessage}</div>}
 
       <div className="messagesShell">
-        <div className="messages" aria-live="polite" ref={messagesRef} onScroll={handleMessagesScroll}>
+        <div className="messages" role="log" aria-label="Conversation messages" aria-live="polite" ref={messagesRef} onScroll={handleMessagesScroll} tabIndex={0}>
           {messages.map((message) => (
             <div className={`message ${message.author} ${message.delivery || ""}`} key={message.id}>
+              <span className="srOnly">{message.author === "player" ? "You: " : message.author === "partner" ? "Opponent: " : "Round update: "}</span>
               {message.text}
               {message.delivery === "pending" && <small className="messageDelivery">Sending...</small>}
             </div>
@@ -195,11 +178,12 @@ export function ChatRoom({
           </button>
         </div>
       ) : isLocked ? (
-        <div className="chatEndedBanner">{lockedMessage}</div>
+        <div className="chatEndedBanner" role="status">{lockedMessage}</div>
       ) : (
         <div className="chatControls">
+          {!canGuess && !timerExpired && <p className="chatGuessHint" id={guessHintId}>Exchange {MIN_MESSAGES_PER_SIDE} messages each to unlock guessing. <span>You {Math.min(counts.player, MIN_MESSAGES_PER_SIDE)}/{MIN_MESSAGES_PER_SIDE} · Opponent {Math.min(counts.partner, MIN_MESSAGES_PER_SIDE)}/{MIN_MESSAGES_PER_SIDE}</span></p>}
           {pendingGuessConfirm && (
-            <div className="guessConfirm">
+            <div className="guessConfirm" role="group" aria-label="Confirm final guesses">
               <span>Lock chat and make final guesses?</span>
               <div>
                 <button className="secondaryButton" type="button" onClick={onCancelGuess}>
@@ -214,6 +198,7 @@ export function ChatRoom({
           <form className="composer" onSubmit={onSend}>
             <input
               ref={inputRef}
+              aria-label="Chat message"
               disabled={timerExpired}
               maxLength={400}
               value={draft}
@@ -223,8 +208,8 @@ export function ChatRoom({
             <button disabled={!canSend} type="submit">
               Send
             </button>
-            <button className="secondaryButton" disabled={!canGuess || timerExpired} type="button" onClick={onGuess}>
-              {guessLabel}
+            <button className="secondaryButton" disabled={!canGuess || timerExpired} aria-describedby={!canGuess && !timerExpired ? guessHintId : undefined} type="button" onClick={onGuess}>
+              Make a guess
             </button>
           </form>
         </div>

@@ -9,3 +9,4 @@ coverage/
 npm-debug.log*
 local-dev.*.log
 temp.MD
+backend/.local/

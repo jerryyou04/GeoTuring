@@ -1,7 +1,7 @@
 import React from "react";
 import type { StoredTranscriptMessage } from "../types";
 
-// Renders a stored chat transcript as bubbles. Messages are stored from the
+// Renders a stored chat transcript as a readable log. Messages are stored from the
 // owning player's perspective, so "player" is always that person and "partner"
 // is whoever (or whatever) they were talking to.
 export function TranscriptView({
@@ -16,15 +16,16 @@ export function TranscriptView({
   }
 
   return (
-    <div className="chatTranscript">
+    <div className="transcriptLog" role="list" aria-label="Chat transcript">
       {transcript.map((message, index) => (
         <div
-          className={`chatBubbleRow ${message.author === "player" ? "self" : "other"}`}
+          className={`transcriptLogRow ${message.author === "player" ? "self" : "other"}`}
+          role="listitem"
           key={message.id || `${index}`}
         >
-          <div className="chatBubble">
-            <span className="chatBubbleAuthor">
-              {message.author === "player" ? "You" : partnerLabel}
+          <div className="transcriptMessageContent">
+            <span className="transcriptAuthor">
+              {message.author === "player" ? "You" : message.author === "system" ? "System" : partnerLabel}
             </span>
             <p>{message.text}</p>
             <time>{formatTime(message.sentAt)}</time>

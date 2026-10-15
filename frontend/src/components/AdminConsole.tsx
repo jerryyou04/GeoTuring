@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import type { FormEvent } from "react";
 import {
   ADMIN_API_PATH,
@@ -22,8 +22,8 @@ import {
   shortSocketId,
 } from "../utils";
 import { StatusPill } from "./StatusPill";
-import { TranscriptView } from "./TranscriptView";
-import { GuessSummary, roundStatus } from "./HistoryDetail";
+import { roundStatus } from "./HistoryDetail";
+import { HistoryRoundDetails } from "./HistoryRoundDetails";
 
 export function AdminConsole() {
   const [password, setPassword] = useState("");
@@ -129,6 +129,7 @@ export function AdminConsole() {
         </div>
         <div className="adminTopActions">
           <StatusPill value={status} />
+          <a className="secondaryButton" href="/">Back to game</a>
           {token && (
             <button className="secondaryButton" onClick={logout}>
               Log out
@@ -139,10 +140,12 @@ export function AdminConsole() {
 
       {!token ? (
         <section className="centerPanel adminLogin">
-          <p className="roundLabel">Admin login</p>
-          <h2>Enter the monitor password.</h2>
+          <h2>Sign in to the monitor</h2>
+          <p>View live rooms, waiting players, and completed rounds.</p>
           <form onSubmit={login}>
+            <label htmlFor="monitorPassword">Monitor password</label>
             <input
+              id="monitorPassword"
               autoComplete="current-password"
               autoFocus
               onChange={(event) => setPassword(event.target.value)}
@@ -150,11 +153,11 @@ export function AdminConsole() {
               type="password"
               value={password}
             />
-            <button className="primaryButton" disabled={!password} type="submit">
-              Unlock
+            <button className="primaryButton" disabled={!password || status === "Checking"} type="submit">
+              {status === "Checking" ? "Signing in…" : "Sign in"}
             </button>
           </form>
-          {error && <p className="adminError">{error}</p>}
+          {error && <p className="adminError" role="alert">{error}</p>}
         </section>
       ) : (
         <AdminDashboard error={error} snapshot={snapshot} token={token} />
@@ -175,18 +178,18 @@ function AdminDashboard({
   return (
     <section className="adminDashboard">
       <div className="adminSummary">
-        <AdminMetric label="Active rooms" value={snapshot ? snapshot.rooms.length : 0} />
-        <AdminMetric label="Waiting players" value={snapshot ? snapshot.waiting.length : 0} />
+        <AdminMetric label="Active rooms" value={snapshot ? snapshot.rooms.length : "—"} />
+        <AdminMetric label="Waiting players" value={snapshot ? snapshot.waiting.length : "—"} />
         <AdminMetric label="Last refresh" value={snapshot ? formatTimestamp(snapshot.generatedAt) : "Pending"} />
       </div>
 
-      {error && <p className="adminError">{error}</p>}
+      {error && <p className="adminError" role="alert">{error}</p>}
 
       {snapshot && snapshot.waiting.length > 0 && (
-        <section className="adminPanel">
+        <section className="adminPanel adminQueuePanel">
           <div className="adminPanelHeader">
-            <p className="roundLabel">Queue</p>
             <h2>Waiting players</h2>
+            <span className="collectionCount">{snapshot.waiting.length} waiting</span>
           </div>
           <div className="adminQueueList">
             {snapshot.waiting.map((entry) => (
@@ -206,8 +209,9 @@ function AdminDashboard({
           snapshot.rooms.map((room) => <AdminRoomCard key={room.id} room={room} />)
         ) : (
           <div className="adminPanel emptyRooms">
-            <p className="roundLabel">Rooms</p>
-            <h2>No active rooms.</h2>
+            <h2>{snapshot ? "No active rooms" : error ? "Room data unavailable" : "Connecting to the monitor…"}</h2>
+            {snapshot && <p>New conversations will appear here automatically.</p>}
+            {!snapshot && error && <p>The connection will retry automatically.</p>}
           </div>
         )}
       </section>
@@ -286,11 +290,12 @@ function AdminHistoryPanel({ token }: { token: string }) {
     <section className="adminPanel adminHistory">
       <div className="adminPanelHeader">
         <div>
-          <p className="roundLabel">Archive</p>
           <h2>Game history</h2>
+          <p className="panelDescription">Completed rounds, including both perspectives of human matches.</p>
         </div>
         <form className="adminHistoryFilter" onSubmit={applyFilter}>
           <input
+            aria-label="Filter history by player ID"
             onChange={(event) => setFilterInput(event.target.value)}
             placeholder="Filter by player id…"
             value={filterInput}
@@ -322,7 +327,8 @@ function AdminHistoryPanel({ token }: { token: string }) {
         <p className="emptyTranscript">No games recorded{appliedFilter ? " for that player" : ""} yet.</p>
       ) : (
         <>
-          <div className="adminHistoryList">
+          <div className="adminHistoryList" aria-busy={loading}>
+            <div className="adminHistoryHead adminHistoryRow" aria-hidden="true"><span>When</span><span>Player</span><span>Opponent</span><span>Read</span><span>Round score</span><span>Detail</span><span>Messages</span></div>
             {games.map((game) => (
               <AdminHistoryRow
                 key={`${game.playerId}:${game.sessionId}`}
@@ -332,14 +338,14 @@ function AdminHistoryPanel({ token }: { token: string }) {
             ))}
           </div>
 
-          <div className="adminHistoryPager">
+          <nav className="adminHistoryPager" aria-label="History pages">
             <button
               className="secondaryButton"
               disabled={page <= 1 || loading}
               onClick={() => setPage((value) => Math.max(1, value - 1))}
               type="button"
             >
-              ← Prev
+              Previous
             </button>
             <span>
               Page {page} of {totalPages} · {total} game{total === 1 ? "" : "s"}
@@ -350,9 +356,9 @@ function AdminHistoryPanel({ token }: { token: string }) {
               onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
               type="button"
             >
-              Next →
+              Next
             </button>
-          </div>
+          </nav>
         </>
       )}
     </section>
@@ -363,6 +369,7 @@ function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pair
   const [expanded, setExpanded] = useState(false);
   const isHuman = game.opponentType === "Human";
   const messageCount = game.messageCount ?? game.transcript?.length ?? 0;
+  const detailsId = useId();
 
   return (
     <div className={`adminHistoryEntry ${expanded ? "expanded" : ""} ${pairedOnPage ? "paired" : ""}`}>
@@ -370,12 +377,13 @@ function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pair
         className="adminHistoryRow"
         type="button"
         aria-expanded={expanded}
+        aria-controls={detailsId}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="adminHistoryWhen">{formatPlayedAt(game.playedAt)}</span>
         <code className="adminHistoryPlayer">{game.playerId}</code>
         <span className="adminHistoryTagCell">
-          <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+          <span>{game.opponentType}</span>
           {isHuman && (
             <span
               className={`historyLinkGlyph ${pairedOnPage ? "matched" : ""}`}
@@ -390,23 +398,19 @@ function AdminHistoryRow({ game, pairedOnPage }: { game: AdminHistoryEntry; pair
             </span>
           )}
         </span>
-        <span className="historyMono">read {round1(game.readEarned)}/{game.readPossible}</span>
-        <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
-          {game.correctIdentity ? "✓" : "✗"}
+        <span className={`adminHistoryRead historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
+          {game.correctIdentity ? "✓" : "✗"} <span className="srOnly">Read {game.correctIdentity ? "correct" : "wrong"}: </span>{round1(game.readEarned)}/{game.readPossible}
         </span>
-        <span className={`historyMono roundStatus-${roundStatus(game)}`}>
+        <span className={`adminHistoryScore historyMono roundStatus-${roundStatus(game)}`}>
+          <span className="adminFieldLabel">Round score: </span>
           {round1(game.roundEarned)}/{game.roundPossible}
         </span>
         <span className="historyDetail">{formatDetail(game)}</span>
         <span className="adminHistoryCount">{messageCount} msg{expanded ? " ▾" : " ▸"}</span>
       </button>
       {expanded && (
-        <div className="historyChat">
-          <GuessSummary game={game} />
-          <TranscriptView
-            transcript={game.transcript}
-            partnerLabel={isHuman ? "Opponent" : game.modelFamily || "AI"}
-          />
+        <div className="historyChat" id={detailsId} role="region" aria-label={`Round details for ${game.playerId}`}>
+          <HistoryRoundDetails game={game} />
         </div>
       )}
     </div>

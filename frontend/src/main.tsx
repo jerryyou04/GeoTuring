@@ -68,9 +68,11 @@ import {
 } from "./components/GuessScreens";
 import { Landing } from "./components/Landing";
 import { Matchmaking } from "./components/Matchmaking";
-import { HistoryIcon, LeaderboardIcon } from "./components/NavIcons";
+import { Sidebar } from "./components/Sidebar";
 import { Reveal } from "./components/Reveal";
 import { StatusPill } from "./components/StatusPill";
+import { RoundProgress } from "./components/RoundProgress";
+import { RoundLayout } from "./components/RoundLayout";
 
 const RECONNECT_UI_GRACE_MS = 5000;
 
@@ -1732,47 +1734,25 @@ function GameApp() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brandMark" src="/geoturing-logo.png" alt="GeoTuring logo" />
-          <div className="brandText">
-            <strong>GeoTuring</strong>
-          </div>
-        </div>
-        <nav className="sidebarNav">
-          <button
-            className="navItem primary"
-            type="button"
-            disabled={!canStartNewGame}
-            title={!canStartNewGame && phase !== "landing"
-              ? "A new game is available once the current round is fully over."
-              : undefined}
-            onClick={restart}
-          >
-            <span className="navIcon">+</span>
-            New game
-          </button>
-          <a className="navItem" href="/history">
-            <span className="navIcon ghost"><HistoryIcon /></span>
-            History
-          </a>
-          <a className="navItem" href="/leaderboard">
-            <span className="navIcon ghost"><LeaderboardIcon /></span>
-            Leaderboard
-          </a>
-        </nav>
-        <div className="sidebarFooter">
-          <StatusPill value={connection} />
-        </div>
-      </aside>
+      <Sidebar
+        active="game"
+        newGameAction={{
+          disabled: !canStartNewGame,
+          title: !canStartNewGame && phase !== "landing"
+            ? "A new game is available once the current round is fully over."
+            : undefined,
+          onClick: restart,
+        }}
+        footer={<StatusPill value={connection} />}
+      />
 
-      <main className="appMain">
-        <header className="topbar">
+      <main className={`appMain ${phase === "landing" ? "landingMain" : "gameMain"}`}>
+        {phase !== "landing" && <header className="topbar">
           <div>
-            <p className="eyebrow">Anonymous chat · guess human or AI</p>
-            <h1>Read the room. Then read the world.</h1>
+            <h1>{phase === "matching" ? "New round" : phase === "ended" ? "Round ended" : phase === "reveal" ? "Round result" : "Current round"}</h1>
           </div>
-        </header>
+          {phase !== "matching" && phase !== "ended" && <RoundProgress phase={phase} />}
+        </header>}
 
       {phase === "landing" && (
         <Landing
@@ -1793,25 +1773,24 @@ function GameApp() {
         />
       )}
       {(phase === "chat" || phase === "ended" || isFinalGuessPhase || phase === "reveal") && (
-        <section className={`roundLayout ${phase === "chat" || phase === "ended" ? "chatOnly" : ""}`}>
+        <RoundLayout phase={phase}>
           <ChatRoom
             canRestart={canStartNewGame}
             canGuess={phase === "chat" && canGuess}
             counts={chatCounts}
             draft={draft}
             endMessage={endMessage}
-            finalGuessSecondsLeft={phase === "reveal" ? 0 : finalGuessSecondsLeft}
             isEnded={phase === "ended"}
             isLocked={isFinalGuessPhase || phase === "reveal"}
             isPlayerTurn={phase === "chat" && isPlayerTurn}
             lockedMessage={
               phase === "waitingGuess"
-                ? "Final answer locked. Waiting for the other result beside the chat."
+                ? "Final answer locked. Waiting for the other result."
                 : phase === "reveal"
                   ? result?.opponentPending
-                    ? "Final answer locked. Finalizing the round beside the chat."
-                    : "Round complete. Review the result beside the chat."
-                  : "Chat locked. Make your final read beside the chat."
+                    ? "Final answer locked. Finalizing the round."
+                    : "Round complete. Review the result."
+                  : "Chat locked. Make your final guess."
             }
             messages={messages}
             pendingGuessConfirm={phase === "chat" && pendingGuessConfirm}
@@ -1859,7 +1838,7 @@ function GameApp() {
               onRestart={restart}
             />
           )}
-        </section>
+        </RoundLayout>
       )}
       </main>
     </div>

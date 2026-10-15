@@ -1,0 +1,597 @@
+/* Shared collection pages: aligned headings, flat rows, readable states. */
+
+.collectionPage {
+  grid-template-rows: auto auto;
+  row-gap: var(--space-8);
+}
+
+.collectionHeader, .collectionBody {
+  width: min(100%, 1080px);
+  min-width: 0;
+  justify-self: center;
+}
+
+.collectionHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.collectionHeader h1 {
+  margin: 0;
+  font-size: var(--type-title);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.3;
+}
+
+.collectionHeader p {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--type-small);
+}
+
+.collectionCount {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.collectionState {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+  padding: var(--space-8) 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--type-body);
+}
+
+.collectionState p {
+  margin: 0;
+}
+
+.historyFieldLabel, .adminFieldLabel, .srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* History keeps the same information in fewer columns. */
+
+.historyList {
+  display: grid;
+  min-width: 0;
+}
+
+.historyRow {
+  display: grid;
+  grid-template-columns: 132px 80px 136px 88px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--type-small);
+  line-height: 1.5;
+}
+
+.historyHead {
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.historyWhen {
+  color: var(--text-muted);
+}
+
+.historyOpponent {
+  font-weight: 500;
+}
+
+.historyReadValue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.historyReadValue .historyMono {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.historyRow .historyDetail {
+  display: block;
+  min-width: 0;
+}
+
+.historyEntry {
+  min-width: 0;
+}
+
+.historyRowButton {
+  width: 100%;
+  text-align: left;
+  transition: background 140ms ease;
+}
+
+.historyRowButton:hover, .historyEntry.expanded .historyRowButton {
+  background: var(--surface);
+}
+
+.historyChevron {
+  display: flex;
+  color: var(--text-faint);
+  transition: transform 140ms ease;
+}
+
+.historyEntry.expanded .historyChevron {
+  transform: rotate(180deg);
+}
+
+.historyChat {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.75fr) minmax(0, 1.25fr);
+  gap: var(--space-8);
+  padding: var(--space-6);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.historySummary {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.historySummaryItem {
+  display: grid;
+  justify-content: start;
+  gap: var(--space-1);
+}
+
+.historySummaryLabel {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.historySummaryValue {
+  color: var(--text);
+  text-align: left;
+  font-size: var(--type-small);
+  line-height: 1.6;
+}
+
+.historySummaryReason {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--type-small);
+  font-style: normal;
+  line-height: 1.6;
+}
+
+.historyConversation {
+  min-width: 0;
+}
+
+.historyRoundDetails {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: var(--space-6);
+}
+
+.historyMapPreview {
+  width: 100%;
+  max-width: 440px;
+  min-width: 0;
+  margin: 0;
+}
+
+.historyMapSwitch {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.historyMapSwitch button {
+  padding: 0 0 var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--type-small);
+}
+
+.historyMapSwitch button:hover {
+  color: var(--text);
+}
+
+.historyMapSwitch button[aria-pressed="true"] {
+  border-bottom-color: var(--blue);
+  color: var(--text);
+}
+
+.historyMapLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.historyMapPreview figcaption, .historyMapEmpty {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.historyMapPreview figcaption p {
+  margin: var(--space-1) 0 0;
+}
+
+.historyMapLegend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+
+.historyMapLegend .guess {
+  background: var(--red);
+}
+
+.historyMapLegend .actual {
+  background: var(--green);
+}
+
+.historyMapEmpty {
+  margin: 0;
+  padding: var(--space-4) 0;
+  border-block: 1px solid var(--border);
+}
+
+.historyChatMeta {
+  margin: 0 0 var(--space-3);
+  color: var(--text-faint);
+  font-size: var(--type-small);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.transcriptLog {
+  display: grid;
+}
+
+.transcriptLogRow {
+  border-bottom: 1px solid var(--border);
+}
+
+.transcriptLogRow:last-child {
+  border-bottom: 0;
+}
+
+.transcriptMessageContent {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 60px;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.transcriptAuthor, .transcriptLogRow time {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.transcriptLogRow.self .transcriptAuthor {
+  color: var(--blue);
+}
+
+.transcriptMessageContent p {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--type-small);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.transcriptLogRow time {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Leaderboard: one quiet form and a semantic table, with aligned numeric columns. */
+
+.nameEditor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  align-items: start;
+  gap: var(--space-8);
+  margin-bottom: var(--space-6);
+}
+
+.nameEditor label {
+  font-size: var(--type-body);
+  font-weight: 500;
+}
+
+.nameHint {
+  max-width: 430px;
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--type-small);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.nameEditorControls {
+  min-width: 0;
+}
+
+.nameEditorRow {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.nameEditorRow input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+}
+
+.nameEditorRow button {
+  flex-shrink: 0;
+}
+
+.nameFeedback {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.leaderboardList {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--type-body);
+}
+
+.leaderboardList th, .leaderboardList td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboardList thead th {
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.leaderboardList thead th:first-child {
+  width: 64px;
+}
+
+.leaderboardList thead th:nth-child(3) {
+  width: 96px;
+}
+
+.leaderboardList thead th:last-child {
+  width: 144px;
+}
+
+.leaderboardList th:nth-child(n+3), .leaderboardList td:nth-child(n+3) {
+  text-align: right;
+}
+
+.leaderboardRank {
+  color: var(--text-faint);
+  font-size: var(--type-small);
+}
+
+.leaderboardList tbody tr:nth-child(-n+3) .leaderboardRank {
+  color: var(--blue);
+}
+
+.leaderboardName {
+  color: var(--text);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.leaderboardPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-top: var(--space-6);
+}
+
+.leaderboardPager span {
+  color: var(--text-muted);
+  font-size: var(--type-small);
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .historyRow {
+    grid-template-columns: 120px 64px 120px 76px minmax(0, 1fr) 16px;
+    gap: var(--space-3);
+  }
+  .historyChat {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+}
+
+@media (max-width: 760px) {
+  .collectionHeader {
+    align-items: start;
+    gap: var(--space-4);
+  }
+  .collectionCount {
+    padding-top: var(--space-2);
+  }
+  .historyHead {
+    display: none;
+  }
+  .historyList {
+    border-top: 1px solid var(--border);
+  }
+  .historyRowButton {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "when opponent" "read round" "detail detail";
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+  }
+  .historyWhen {
+    grid-area: when;
+  }
+  .historyOpponent {
+    grid-area: opponent;
+    justify-self: end;
+    margin-right: var(--space-6);
+  }
+  .historyRead {
+    grid-area: read;
+  }
+  .historyRound {
+    grid-area: round;
+  }
+  .historyRead, .historyRound {
+    display: grid;
+    align-content: start;
+    gap: var(--space-1);
+  }
+  .historyFieldLabel, .adminFieldLabel {
+    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+    color: var(--text-faint);
+    font-size: 0.75rem;
+  }
+  .historyRow .historyDetail {
+    grid-area: detail;
+  }
+  .historyChevron {
+    position: absolute;
+    right: 0;
+    top: 18px;
+  }
+  .historyChat {
+    padding: var(--space-4);
+  }
+  .nameEditor {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+  .nameEditorControls {
+    width: min(100%, 440px);
+  }
+}
+
+@media (max-width: 560px) {
+  .collectionHeader p {
+    max-width: 280px;
+  }
+  .transcriptMessageContent {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-1) var(--space-3);
+  }
+  .transcriptMessageContent p {
+    grid-column: 1 / -1;
+    order: 2;
+  }
+  .transcriptLogRow time {
+    order: 1;
+  }
+  .leaderboardList th, .leaderboardList td {
+    padding: var(--space-3) var(--space-2);
+    font-size: var(--type-small);
+  }
+  .leaderboardList thead th {
+    font-size: 0.75rem;
+  }
+  .leaderboardList thead th:first-child {
+    width: 40px;
+  }
+  .leaderboardList thead th:nth-child(3) {
+    width: 56px;
+  }
+  .leaderboardList thead th:last-child {
+    width: 88px;
+  }
+  .leaderboardPager {
+    flex-wrap: wrap;
+  }
+  .leaderboardPager span {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .leaderboardPager button {
+    flex: 1;
+  }
+}
+
+/* Shared outcome text in player and admin history. */
+
+.historyMono {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.historyVerdict {
+  font-weight: 500;
+}
+
+.historyVerdict.correct, .roundStatus-correct {
+  color: var(--green);
+}
+
+.historyVerdict.wrong, .roundStatus-wrong {
+  color: var(--red);
+}
+
+.roundStatus-partial {
+  color: var(--yellow);
+}
+
+.historyDetail {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

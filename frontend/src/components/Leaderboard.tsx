@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { API_URL } from "../config";
 import { loadName, loadOrCreatePlayerId, saveName } from "../storage";
 import type { LeaderboardEntry, LeaderboardResponse } from "../types";
-import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
+import { CollectionPage, CollectionState } from "./CollectionPage";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
 const LEADERBOARD_PAGE_SIZE = 25;
@@ -15,6 +15,7 @@ export function Leaderboard() {
   const [totalPages, setTotalPages] = useState(0);
   const [name, setName] = useState(() => loadName());
   const [saving, setSaving] = useState(false);
+  const [nameFeedback, setNameFeedback] = useState("");
 
   const autoName = `Player-${loadOrCreatePlayerId().slice(0, 4)}`;
 
@@ -73,18 +74,24 @@ export function Leaderboard() {
   useEffect(() => load(), [load]);
 
   async function handleSaveName() {
+    if (saving) return;
     const trimmed = name.trim().slice(0, 20);
     setSaving(true);
+    setNameFeedback("");
     saveName(trimmed);
+    setName(trimmed);
 
     try {
-      await fetch(`${API_URL}/api/name`, {
+      const response = await fetch(`${API_URL}/api/name`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playerId: loadOrCreatePlayerId(), name: trimmed }),
       });
+      if (!response.ok) throw new Error("Name update failed");
+      const payload = await response.json();
+      setNameFeedback(payload.enabled === false ? "Saved on this device." : "Name saved.");
     } catch {
-      // Name is still saved locally; ignore network failure.
+      setNameFeedback("Saved on this device. Server update unavailable.");
     }
 
     setSaving(false);
@@ -92,84 +99,62 @@ export function Leaderboard() {
   }
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brandMark" src="/geoturing-logo.png" alt="GeoTuring logo" />
-          <div className="brandText">
-            <strong>GeoTuring</strong>
-          </div>
+    <CollectionPage
+      active="leaderboard"
+      title="Leaderboard"
+      description="Players ranked by games played."
+      count={total > 0 ? `${total} player${total === 1 ? "" : "s"}` : undefined}
+    >
+      <form className="nameEditor" onSubmit={(event) => {event.preventDefault(); void handleSaveName();}}>
+        <div className="nameEditorCopy">
+          <label htmlFor="displayName">Your display name</label>
+          <p className="nameHint" id="nameHint">Shown on the leaderboard. Leave blank to use {autoName}.</p>
         </div>
-        <nav className="sidebarNav">
-          <a className="navItem primary" href="/">
-            <span className="navIcon">+</span>
-            New game
-          </a>
-          <a className="navItem" href="/history">
-            <span className="navIcon ghost"><HistoryIcon /></span>
-            History
-          </a>
-          <a className="navItem active" href="/leaderboard">
-            <span className="navIcon ghost"><LeaderboardIcon /></span>
-            Leaderboard
-          </a>
-        </nav>
-      </aside>
-
-      <main className="appMain">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Most games played</p>
-            <h1>Leaderboard</h1>
+        <div className="nameEditorControls">
+          <div className="nameEditorRow">
+            <input
+              id="displayName"
+              maxLength={20}
+              value={name}
+              placeholder={autoName}
+              aria-describedby="nameHint nameFeedback"
+              onChange={(event) => {
+                setName(event.target.value);
+                setNameFeedback("");
+              }}
+            />
+            <button className="secondaryButton" type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
           </div>
-        </header>
+          <p className="nameFeedback" id="nameFeedback" role="status">{nameFeedback || "\u00a0"}</p>
+        </div>
+      </form>
 
-        <section className="gamePanel historyPanel">
-          <div className="nameEditor">
-            <label htmlFor="displayName">Your display name</label>
-            <div className="nameEditorRow">
-              <input
-                id="displayName"
-                maxLength={20}
-                value={name}
-                placeholder={autoName}
-                onChange={(event) => setName(event.target.value)}
-              />
-              <button className="secondaryButton" type="button" disabled={saving} onClick={handleSaveName}>
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-            <p className="nameHint">Shown on the leaderboard. Leave blank to use your auto-name ({autoName}).</p>
-          </div>
-
-          {state === "loading" && <p className="historyNote">Loading leaderboard…</p>}
-          {state === "error" && <p className="historyNote">Couldn't load the leaderboard right now.</p>}
-          {state === "disabled" && (
-            <p className="historyNote">The leaderboard isn't set up on the server yet.</p>
-          )}
-          {state === "empty" && (
-            <div className="historyNote">
-              <p>No games played yet.</p>
-              <a className="primaryButton" href="/">Play the first round</a>
-            </div>
-          )}
-          {state === "ready" && (
-            <>
-              <LeaderboardList players={players} />
-              <LeaderboardPager
-                page={page}
-                total={total}
-                totalPages={totalPages}
-                onPageChange={(nextPage) => {
-                  setState("loading");
-                  setPage(nextPage);
-                }}
-              />
-            </>
-          )}
-        </section>
-      </main>
-    </div>
+      {state === "loading" && <CollectionState>Loading leaderboard…</CollectionState>}
+      {state === "error" && <CollectionState>Couldn't load the leaderboard right now.</CollectionState>}
+      {state === "disabled" && <CollectionState>The leaderboard isn't available on this server yet.</CollectionState>}
+      {state === "empty" && (
+        <CollectionState>
+          <p>No games played yet.</p>
+          <a className="primaryButton" href="/">Play the first round</a>
+        </CollectionState>
+      )}
+      {state === "ready" && (
+        <>
+          <LeaderboardList players={players} />
+          <LeaderboardPager
+            page={page}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={(nextPage) => {
+              setState("loading");
+              setPage(nextPage);
+            }}
+          />
+        </>
+      )}
+    </CollectionPage>
   );
 }
 
@@ -195,7 +180,7 @@ function LeaderboardPager({
         Previous
       </button>
       <span aria-live="polite">
-        Page {page} of {totalPages} ({total} player{total === 1 ? "" : "s"})
+        Page {page} of {totalPages} · {total} player{total === 1 ? "" : "s"}
       </span>
       <button
         className="secondaryButton"
@@ -211,21 +196,19 @@ function LeaderboardPager({
 
 function LeaderboardList({ players }: { players: LeaderboardEntry[] }) {
   return (
-    <div className="leaderboardList">
-      <div className="leaderboardRow leaderboardHead">
-        <span>#</span>
-        <span>Player</span>
-        <span>Games</span>
-        <span>Read accuracy</span>
-      </div>
+    <table className="leaderboardList">
+      <caption className="srOnly">Players ranked by games played, with read accuracy.</caption>
+      <thead><tr><th scope="col">Rank</th><th scope="col">Player</th><th scope="col">Games</th><th scope="col">Read accuracy</th></tr></thead>
+      <tbody>
       {players.map((player) => (
-        <div className="leaderboardRow" key={`${player.rank}:${player.name}`}>
-          <span className="leaderboardRank">{player.rank}</span>
-          <span className="leaderboardName">{player.name}</span>
-          <span className="historyMono">{player.games}</span>
-          <span className="historyMono">{Math.round(player.readAccuracy * 100)}%</span>
-        </div>
+        <tr key={`${player.rank}:${player.name}`}>
+          <td className="leaderboardRank">{player.rank}</td>
+          <th scope="row" className="leaderboardName">{player.name}</th>
+          <td className="historyMono">{player.games}</td>
+          <td className="historyMono">{Math.round(player.readAccuracy * 100)}%</td>
+        </tr>
       ))}
-    </div>
+      </tbody>
+    </table>
   );
 }

@@ -3,13 +3,11 @@ import L from "leaflet";
 import { MODEL_FAMILIES } from "../config";
 import { GUESS_MARKER } from "../leafletIcons";
 import type { IdentityGuess, ModelFamily, Pin } from "../types";
+import { PanelHeading, RoundTimer } from "./PanelHeading";
 
 export function FinalGuessTimer({ secondsLeft }: { secondsLeft: number }) {
   return (
-    <div className="finalGuessTimer" aria-label={`${secondsLeft} seconds left to guess`}>
-      <span>Guess timer</span>
-      <strong>{secondsLeft}s</strong>
-    </div>
+    <RoundTimer label="Time to guess" value={`${secondsLeft}s`} urgent={secondsLeft <= 10} />
   );
 }
 
@@ -23,20 +21,14 @@ export function IdentityGuessScreen({
   onPick: (value: IdentityGuess) => void;
 }) {
   return (
-    <section className="centerPanel">
-      <div className="finalGuessHeader">
-        <div>
-          <p className="roundLabel">First guess</p>
-          <h2>Who were you talking to?</h2>
-        </div>
-        <FinalGuessTimer secondsLeft={secondsLeft} />
-      </div>
+    <section className="centerPanel decisionPanel">
+      <PanelHeading label="Identity" title="Who were you talking to?" actions={<FinalGuessTimer secondsLeft={secondsLeft} />} />
       <div className="choiceGrid two">
-        <button disabled={disabled} onClick={() => onPick("Human")}>
+        <button type="button" disabled={disabled} onClick={() => onPick("Human")}>
           <span>Human</span>
           <small>Next: place a map pin</small>
         </button>
-        <button disabled={disabled} onClick={() => onPick("AI")}>
+        <button type="button" disabled={disabled} onClick={() => onPick("AI")}>
           <span>AI</span>
           <small>Next: pick the model family</small>
         </button>
@@ -61,31 +53,27 @@ export function HumanGuessScreen({
   onSubmit: () => void;
 }) {
   return (
-    <section className="gamePanel humanGuessCard">
-      <div className="chatHeader">
-        <div>
-          <p className="roundLabel">Human read</p>
-          <h2>Place the origin pin.</h2>
-        </div>
-        <div className="guessHeaderActions">
+    <section className="gamePanel humanGuessCard decisionPanel">
+      <PanelHeading label="Location" title="Guess their location" actions={
+        <>
           <FinalGuessTimer secondsLeft={secondsLeft} />
-          <button className="secondaryButton" disabled={disabled} onClick={onBack}>
+          <button className="secondaryButton" type="button" disabled={disabled} onClick={onBack}>
             Back
           </button>
-        </div>
-      </div>
+        </>
+      } />
 
       <GuessMap disabled={disabled} pin={pin} onPin={onPin} />
 
       <div className="mapFooter">
-        <span>
+        <span role="status">
           {disabled
             ? "Final guess time expired."
             : pin
-              ? "Pin placed"
-              : "Tap the map to place a pin."}
+              ? "Pin placed. Tap elsewhere to move it."
+              : "Click or tap to place a pin. With the map focused, Enter pins its center."}
         </span>
-        <button className="primaryButton" disabled={disabled || !pin} onClick={onSubmit}>
+        <button className="primaryButton" type="button" disabled={disabled || !pin} onClick={onSubmit}>
           Lock human guess
         </button>
       </div>
@@ -135,11 +123,17 @@ function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null
         return;
       }
 
-      onPinRef.current({
-        lat: event.latlng.lat,
-        lng: event.latlng.lng,
-      });
+      const point = event.latlng.wrap();
+      onPinRef.current({ lat: point.lat, lng: point.lng });
     });
+
+    function handleMapKey(event: KeyboardEvent) {
+      if (event.key !== "Enter" || event.target !== element || disabledRef.current) return;
+      event.preventDefault();
+      const center = map.getCenter().wrap();
+      onPinRef.current({ lat: center.lat, lng: center.lng });
+    }
+    element.addEventListener("keydown", handleMapKey);
 
     mapRef.current = map;
 
@@ -152,6 +146,7 @@ function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null
 
     return () => {
       resizeObserver.disconnect();
+      element.removeEventListener("keydown", handleMapKey);
       map.remove();
       mapRef.current = null;
       markerRef.current = null;
@@ -186,10 +181,7 @@ function GuessMap({ disabled, pin, onPin }: { disabled: boolean; pin: Pin | null
 
   return (
     <div className="guessMapShell">
-      <div className="guessMap" ref={mapElementRef} />
-      <div className="mapCallout">
-        {disabled ? "Final guess time expired." : "Click anywhere to place your final guess."}
-      </div>
+      <div className="guessMap" ref={mapElementRef} role="region" aria-label="World map. Click or tap to place your location guess. Keyboard: arrows to move, plus or minus to zoom, Enter to pin the center." />
     </div>
   );
 }
@@ -208,29 +200,26 @@ export function AiGuessScreen({
   onBack: () => void;
 }) {
   return (
-    <section className="centerPanel">
-      <div className="chatHeader compact">
-        <div>
-          <p className="roundLabel">AI read</p>
-          <h2>Pick the model family.</h2>
-        </div>
-        <div className="guessHeaderActions">
+    <section className="centerPanel decisionPanel">
+      <PanelHeading label="Model" title="Which model were you talking to?" description="Choosing a model locks your answer." actions={
+        <>
           <FinalGuessTimer secondsLeft={secondsLeft} />
-          <button className="secondaryButton" disabled={disabled} onClick={onBack}>
+          <button className="secondaryButton" type="button" disabled={disabled} onClick={onBack}>
             Back
           </button>
-        </div>
-      </div>
+        </>
+      } />
       <div className="choiceGrid">
         {MODEL_FAMILIES.map((family) => (
           <button
+            type="button"
             className={selected === family ? "selected" : ""}
+            aria-pressed={selected === family}
             disabled={disabled}
             key={family}
             onClick={() => onPick(family)}
           >
             <span>{family}</span>
-            <small>Lock answer</small>
           </button>
         ))}
       </div>
@@ -240,10 +229,9 @@ export function AiGuessScreen({
 
 export function WaitingGuessScreen({ secondsLeft }: { secondsLeft: number }) {
   return (
-    <section className="centerPanel finalGuessPanel">
-      <p className="roundLabel">Final read locked</p>
-      <h2>Waiting for opponent's guess.</h2>
-      <p>{secondsLeft}s left before missing guesses are scored as zero.</p>
+    <section className="centerPanel decisionPanel finalGuessPanel" role="status">
+      <PanelHeading title="Your guess is locked" description="Waiting for your opponent to finish." actions={<FinalGuessTimer secondsLeft={secondsLeft} />} />
+      <p className="waitingNote">Unanswered guesses are scored as zero when the timer ends.</p>
     </section>
   );
 }

@@ -87,6 +87,13 @@ async function initDb() {
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_guess_location_lng DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_guess_place JSONB`);
 
+  // Store both revealed locations alongside the pins. Older rounds retain null:
+  // a region/country label cannot reconstruct the original scoring coordinates.
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS actual_location_lat DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS actual_location_lng DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_actual_location_lat DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE game_history ADD COLUMN IF NOT EXISTS opponent_actual_location_lng DOUBLE PRECISION`);
+
   // Supports the admin's newest-first paginated sweep across every player.
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_game_history_played_at
@@ -106,6 +113,8 @@ async function saveGameHistory(record) {
   const guessPlace = normalizeHistoryPlace(record.guessPlace);
   const opponentGuessLocation = normalizeHistoryLocation(record.opponentGuessLocation);
   const opponentGuessPlace = normalizeHistoryPlace(record.opponentGuessPlace);
+  const actualLocation = normalizeHistoryLocation(record.actualLocation);
+  const opponentActualLocation = normalizeHistoryLocation(record.opponentActualLocation);
 
   await pool.query(
     `INSERT INTO game_history (
@@ -116,8 +125,10 @@ async function saveGameHistory(record) {
        opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
        opponent_model_family_guess, opponent_explanation,
        opponent_guess_location_lat, opponent_guess_location_lng, opponent_guess_place,
-       transcript, message_count
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+       transcript, message_count,
+       actual_location_lat, actual_location_lng,
+       opponent_actual_location_lat, opponent_actual_location_lng
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
      ON CONFLICT (player_id, session_id) DO NOTHING`,
     [
       record.playerId,
@@ -148,6 +159,10 @@ async function saveGameHistory(record) {
       opponentGuessPlace ? JSON.stringify(opponentGuessPlace) : null,
       JSON.stringify(transcript),
       transcript.length,
+      actualLocation?.lat ?? null,
+      actualLocation?.lng ?? null,
+      opponentActualLocation?.lat ?? null,
+      opponentActualLocation?.lng ?? null,
     ],
   );
 }
@@ -161,7 +176,9 @@ const HISTORY_COLUMNS = `player_id, session_id, played_at, opponent_type, identi
             opponent_identity_guess, opponent_correct_identity, opponent_distance_km,
             opponent_model_family_guess, opponent_explanation,
             opponent_guess_location_lat, opponent_guess_location_lng, opponent_guess_place,
-            transcript, message_count`;
+            transcript, message_count,
+            actual_location_lat, actual_location_lng,
+            opponent_actual_location_lat, opponent_actual_location_lng`;
 
 // Shared row -> entry mapping so the player and admin views stay in sync.
 function mapHistoryRow(row, { includePlayerId = false } = {}) {
@@ -181,6 +198,8 @@ function mapHistoryRow(row, { includePlayerId = false } = {}) {
     modelFamilyGuess: row.model_family_guess,
     actualRegion: row.actual_region,
     actualCountry: row.actual_country,
+    actualLocation: normalizeHistoryLocation({ lat: row.actual_location_lat, lng: row.actual_location_lng }),
+    opponentActualLocation: normalizeHistoryLocation({ lat: row.opponent_actual_location_lat, lng: row.opponent_actual_location_lng }),
     guessLocation: normalizeHistoryLocation({
       lat: row.guess_location_lat,
       lng: row.guess_location_lng,

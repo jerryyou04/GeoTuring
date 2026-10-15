@@ -1,10 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
-import L from "leaflet";
+import React, { useEffect, useState } from "react";
+import { ComparisonMap } from "./ComparisonMap";
 import type { Pin, ResultPayload, SubmittedGuess } from "../types";
 import { formatGuessPlace } from "../utils";
-
-const CORRECT_MARKER = createRevealMarker("correct");
-const GUESS_MARKER = createRevealMarker("guess");
 
 export function Reveal({
   canRestart = true,
@@ -23,15 +20,12 @@ export function Reveal({
 
   return (
     <section className="gamePanel reveal">
-      <div className="revealTop">
+      <div className={`revealTop ${correct ? "correct" : "wrong"}`}>
         <div>
           <p className="roundLabel">Reveal</p>
-          <h2>{verdict}</h2>
+          <h2 tabIndex={-1}>{verdict}</h2>
           <p>{getResultSummary(result)}</p>
         </div>
-        <span className={`verdictBadge ${correct ? "correct" : "wrong"}`} aria-label={verdict}>
-          {correct ? "✓" : "✗"}
-        </span>
       </div>
 
       <div className="scoreSummary" aria-label="Round score">
@@ -53,10 +47,12 @@ export function Reveal({
         ? <HumanReveal result={result} serverClockOffsetMs={serverClockOffsetMs} />
         : <AiReveal result={result} serverClockOffsetMs={serverClockOffsetMs} />}
 
-      <p className="explanation resultExplanation">{result.explanation}</p>
-      <button className="primaryButton" disabled={!canRestart} onClick={onRestart}>
-        {canRestart ? "Play again" : "Finalizing round..."}
-      </button>
+      <footer className="revealFooter">
+        <p className="explanation resultExplanation">{result.explanation}</p>
+        <button className="primaryButton" type="button" disabled={!canRestart} onClick={onRestart}>
+          {canRestart ? "Play again" : "Finalizing round…"}
+        </button>
+      </footer>
     </section>
   );
 }
@@ -172,7 +168,6 @@ function AiOpponentRead({ result, serverClockOffsetMs }: { result: ResultPayload
 
   return (
     <div className="aiOpponentRead">
-      <p className="roundLabel">Turning the tables</p>
       <h3 className="aiOpponentReadTitle">The AI's read of you</h3>
 
       {opponentPending ? (
@@ -243,94 +238,13 @@ function LocationComparison({
           <p>{detail}</p>
         </div>
       </div>
-      <ComparisonMap correctPin={correctPin} guessPin={guessPin} />
+      <ComparisonMap correctPin={correctPin} guessPin={guessPin} label={`${title}. ${correctPin ? correctLabel : missingCorrectLabel}. ${guessPin ? guessLabel : "No guess pin"}.`} attribution />
       <div className="pinSummary">
         <span className="correct">{correctPin ? correctLabel : missingCorrectLabel}</span>
         <span className="guess">{guessPin ? guessLabel : "No guess pin"}</span>
       </div>
     </section>
   );
-}
-
-function ComparisonMap({ correctPin, guessPin }: { correctPin: Pin | null; guessPin: Pin | null }) {
-  const mapElementRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Marker[]>([]);
-
-  useEffect(() => {
-    const element = mapElementRef.current;
-
-    if (!element || mapRef.current) {
-      return;
-    }
-
-    const map = L.map(element, {
-      center: [20, 0],
-      zoom: 2,
-      zoomControl: false,
-      attributionControl: false,
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      boxZoom: false,
-      keyboard: false,
-      tap: false,
-    });
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-    }).addTo(map);
-
-    mapRef.current = map;
-
-    // The reveal panel scrolls and reflows as it mounts, so the map container's
-    // size isn't final on the first paint. Re-sync Leaflet once it settles.
-    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
-
-    resizeObserver.observe(element);
-
-    return () => {
-      resizeObserver.disconnect();
-      map.remove();
-      mapRef.current = null;
-      markersRef.current = [];
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = [];
-
-    const points: L.LatLngExpression[] = [];
-
-    if (correctPin) {
-      points.push([correctPin.lat, correctPin.lng]);
-      markersRef.current.push(L.marker([correctPin.lat, correctPin.lng], { icon: CORRECT_MARKER }).addTo(map));
-    }
-
-    if (guessPin) {
-      points.push([guessPin.lat, guessPin.lng]);
-      markersRef.current.push(L.marker([guessPin.lat, guessPin.lng], { icon: GUESS_MARKER }).addTo(map));
-    }
-
-    if (points.length > 1) {
-      map.fitBounds(L.latLngBounds(points), { maxZoom: 5, padding: [28, 28] });
-    } else if (points.length === 1) {
-      map.setView(points[0], 4);
-    } else {
-      map.setView([20, 0], 2);
-    }
-
-    window.setTimeout(() => map.invalidateSize(), 0);
-  }, [correctPin, guessPin]);
-
-  return <div className="comparisonMap" ref={mapElementRef} />;
 }
 
 type ScoreTone = "correct" | "partial" | "wrong";
@@ -416,15 +330,6 @@ function AnswerLine({ label, state, value }: { label: string; state?: LineState;
       </dd>
     </div>
   );
-}
-
-function createRevealMarker(kind: "correct" | "guess") {
-  return L.divIcon({
-    className: `revealMarker ${kind}`,
-    html: "<span></span>",
-    iconSize: [32, 42],
-    iconAnchor: [16, 40],
-  });
 }
 
 function getActualPin(actual: ResultPayload["actual"] | ResultPayload["opponentActual"] | null | undefined): Pin | null {

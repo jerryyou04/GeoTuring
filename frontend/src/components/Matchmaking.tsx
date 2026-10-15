@@ -1,6 +1,7 @@
 import React from "react";
 import type { QueueStatus } from "../types";
 import { formatSeconds } from "../utils";
+import { PanelHeading } from "./PanelHeading";
 
 export function Matchmaking({
   actualSeconds,
@@ -18,29 +19,27 @@ export function Matchmaking({
   return (
     <section className={`queuePanel ${isFound ? "matchFound" : ""}`}>
       <div className="queueFrame">
-        <div className="queueHeader">
-          <h2>{isFound ? "Match found!" : "Finding match"}</h2>
-        </div>
+        <PanelHeading title={isFound ? "Match found" : "Finding an opponent"} description={isFound ? "Your conversation will begin shortly." : "Keep this page open while we connect you."} />
 
         <div className="summonerSlots" aria-label={`${connectedProfiles} of ${requiredProfiles} profiles connected`}>
           <ProfileSlot label="You" active={connectedProfiles >= 1} />
-          <ProfileSlot label="Unknown" active={connectedProfiles >= 2} />
+          <ProfileSlot label="Opponent" active={connectedProfiles >= 2} />
         </div>
 
         <div className="queueMeter" aria-hidden="true">
           <span style={{ width: `${Math.min(100, (connectedProfiles / requiredProfiles) * 100)}%` }} />
         </div>
 
-        <div className="queueStatusLine">
+        <div className="queueStatusLine" role="status">
           <strong>
             {Math.min(connectedProfiles, requiredProfiles)}/{requiredProfiles} profiles connected
           </strong>
-          <span>{isFound ? "Entering game..." : "Searching for a worthy opponent"}</span>
+          <span>{isFound ? "Starting conversation…" : "Waiting for a connection…"}</span>
         </div>
 
         <div className="queueTimes">
           <div>
-            <span>Queue Time</span>
+            <span>Time in queue</span>
             <strong>{formatSeconds(actualSeconds)}</strong>
           </div>
         </div>
@@ -52,11 +51,9 @@ export function Matchmaking({
 function ProfileSlot({ active, label }: { active: boolean; label: string }) {
   return (
     <div className={`profileSlot ${active ? "active" : ""}`}>
-      <div className="portrait">
-        {active ? <span className="profileIcon" /> : <span className="unknownIcon">?</span>}
-      </div>
-      <strong>{active ? label : "Waiting..."}</strong>
-      <small>{active ? "Connected" : "Pending"}</small>
+      <span className="profileDot" aria-hidden="true" />
+      <strong>{label}</strong>
+      <small>{active ? "Connected" : "Waiting"}</small>
     </div>
   );
 }

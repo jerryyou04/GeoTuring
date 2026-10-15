@@ -172,6 +172,10 @@ export interface GameHistoryEntry {
   modelFamilyGuess: ModelFamily | null;
   actualRegion: string | null;
   actualCountry: string | null;
+  /** Opponent's revealed location, compared with your guess. Absent in older rounds. */
+  actualLocation?: Pin | null;
+  /** Your revealed location, compared with the opponent's guess. */
+  opponentActualLocation?: Pin | null;
   opponentIdentityGuess: IdentityGuess | null;
   opponentCorrectIdentity: boolean | null;
   opponentDistanceKm: number | null;

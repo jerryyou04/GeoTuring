@@ -37,6 +37,20 @@ npm run dev
 
 The frontend runs on `http://localhost:5173` by default.
 
+### Local sample data without Postgres or Redis
+
+Run `npm run dev:mock` from `backend/` instead of the normal backend command.
+Use the same frontend and API URLs. This separate local entry point supplies
+32 synthetic leaderboard players and six sample rounds for each new local
+player, including human/AI outcomes and expandable chat transcripts.
+
+Completed rounds and display-name changes are saved in the ignored
+`backend/.local/mock-data.json` file and survive backend restarts. Stop the
+backend and remove that file to reset the sample data. This mode uses local
+canned AI replies and does not connect to Postgres, Redis, or OpenRouter.
+`npm start` and `npm run dev` retain the regular production storage behavior;
+`dev:mock` refuses to run with `NODE_ENV=production` or in Railway.
+
 ## Environment Variables
 
 Backend:
@@ -138,6 +152,12 @@ Frontend service:
   transcript snapshot
 
 ## Reverse-Geocoding Attribution
+
+Expanded History rounds include a small guess-versus-actual map. New completed
+rounds persist both revealed rough locations alongside the guess pins; the
+required nullable columns are added by `initDb()` on backend startup. Older rows
+keep their saved pins and place labels, but cannot reconstruct actual coordinates
+that were never recorded.
 
 Guess coordinates are reverse-geocoded by the backend into concise place names;
 provider credentials never belong in the frontend. Without `GEOAPIFY_API_KEY`,

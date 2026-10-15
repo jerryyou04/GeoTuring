@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import { API_URL } from "../config";
 import { loadOrCreatePlayerId } from "../storage";
 import type { GameHistoryEntry } from "../types";
 import { formatDetail, formatPlayedAt } from "../utils";
-import { TranscriptView } from "./TranscriptView";
-import { GuessSummary, roundStatus } from "./HistoryDetail";
-import { HistoryIcon, LeaderboardIcon } from "./NavIcons";
+import { roundStatus } from "./HistoryDetail";
+import { CollectionPage, CollectionState } from "./CollectionPage";
+import { HistoryRoundDetails } from "./HistoryRoundDetails";
 
 type LoadState = "loading" | "ready" | "empty" | "disabled" | "error";
 
@@ -46,67 +46,36 @@ export function History() {
   }, []);
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brandMark" src="/geoturing-logo.png" alt="GeoTuring logo" />
-          <div className="brandText">
-            <strong>GeoTuring</strong>
-          </div>
-        </div>
-        <nav className="sidebarNav">
-          <a className="navItem primary" href="/">
-            <span className="navIcon">+</span>
-            New game
-          </a>
-          <a className="navItem active" href="/history">
-            <span className="navIcon ghost"><HistoryIcon /></span>
-            History
-          </a>
-          <a className="navItem" href="/leaderboard">
-            <span className="navIcon ghost"><LeaderboardIcon /></span>
-            Leaderboard
-          </a>
-        </nav>
-      </aside>
-
-      <main className="appMain">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Your games</p>
-            <h1>History</h1>
-          </div>
-        </header>
-
-        <section className="gamePanel historyPanel">
-          {state === "loading" && <p className="historyNote">Loading your games…</p>}
-          {state === "error" && <p className="historyNote">Couldn't load history right now. Try again later.</p>}
-          {state === "disabled" && (
-            <p className="historyNote">History storage isn't configured on the server yet.</p>
-          )}
-          {state === "empty" && (
-            <div className="historyNote">
-              <p>No finished games yet.</p>
-              <a className="primaryButton" href="/">Play your first round</a>
-            </div>
-          )}
-          {state === "ready" && <HistoryList games={games} />}
-        </section>
-      </main>
-    </div>
+    <CollectionPage
+      active="history"
+      title="History"
+      description="Your finished rounds, reads, and conversations."
+      count={state === "ready" ? `${games.length} round${games.length === 1 ? "" : "s"}` : undefined}
+    >
+      {state === "loading" && <CollectionState>Loading your games…</CollectionState>}
+      {state === "error" && <CollectionState>Couldn't load history right now. Try again later.</CollectionState>}
+      {state === "disabled" && <CollectionState>History isn't available on this server yet.</CollectionState>}
+      {state === "empty" && (
+        <CollectionState>
+          <p>No finished games yet.</p>
+          <a className="primaryButton" href="/">Play your first round</a>
+        </CollectionState>
+      )}
+      {state === "ready" && <HistoryList games={games} />}
+    </CollectionPage>
   );
 }
 
 function HistoryList({ games }: { games: GameHistoryEntry[] }) {
   return (
     <div className="historyList">
-      <div className="historyRow historyHead">
+      <div className="historyRow historyHead" aria-hidden="true">
         <span>When</span>
         <span>Opponent</span>
-        <span>Your read</span>
-        <span>Identity</span>
-        <span>Round</span>
+        <span>Read</span>
+        <span>Round score</span>
         <span>Detail</span>
+        <span />
       </div>
       {games.map((game) => (
         <HistoryRow key={game.sessionId} game={game} />
@@ -118,7 +87,7 @@ function HistoryList({ games }: { games: GameHistoryEntry[] }) {
 function HistoryRow({ game }: { game: GameHistoryEntry }) {
   const isHuman = game.opponentType === "Human";
   const [expanded, setExpanded] = useState(false);
-  const messageCount = game.messageCount ?? game.transcript?.length ?? 0;
+  const detailsId = useId();
 
   return (
     <div className={`historyEntry ${expanded ? "expanded" : ""}`}>
@@ -126,34 +95,32 @@ function HistoryRow({ game }: { game: GameHistoryEntry }) {
         className="historyRow historyRowButton"
         type="button"
         aria-expanded={expanded}
+        aria-controls={detailsId}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="historyWhen">{formatPlayedAt(game.playedAt)}</span>
-        <span>
-          <span className={`historyTag ${isHuman ? "human" : "ai"}`}>{game.opponentType}</span>
+        <time className="historyWhen" dateTime={game.playedAt}>{formatPlayedAt(game.playedAt)}</time>
+        <span className="historyOpponent">{game.opponentType}</span>
+        <span className="historyRead">
+          <span className="historyFieldLabel">Read</span>
+          <span className="historyReadValue">
+            <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
+              {game.correctIdentity ? "✓ Correct" : "✗ Wrong"}
+            </span>
+            <span className="historyMono">{formatScore(game.readEarned)}/{game.readPossible}</span>
+          </span>
         </span>
-        <span className="historyMono">{formatScore(game.readEarned)}/{game.readPossible}</span>
-        <span className={`historyVerdict ${game.correctIdentity ? "correct" : "wrong"}`}>
-          {game.correctIdentity ? "✓ Correct" : "✗ Wrong"}
+        <span className="historyRound">
+          <span className="historyFieldLabel">{isHuman ? "Location score" : "Model score"}</span>
+          <span className={`historyMono roundStatus-${roundStatus(game)}`}>{formatScore(game.roundEarned)}/{game.roundPossible}</span>
         </span>
-        <span className={`historyMono roundStatus-${roundStatus(game)}`}>
-          {formatScore(game.roundEarned)}/{game.roundPossible}
-        </span>
-        <span className="historyDetail">
-          {formatDetail(game)}
-          <span className="historyChevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+        <span className="historyDetail">{formatDetail(game)}</span>
+        <span className="historyChevron" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m6 9 6 6 6-6" /></svg>
         </span>
       </button>
       {expanded && (
-        <div className="historyChat">
-          <GuessSummary game={game} />
-          <p className="historyChatMeta">
-            {messageCount > 0 ? `${messageCount} message${messageCount === 1 ? "" : "s"}` : "Transcript"}
-          </p>
-          <TranscriptView
-            transcript={game.transcript}
-            partnerLabel={isHuman ? "Opponent" : game.modelFamily || "AI"}
-          />
+        <div className="historyChat" id={detailsId} role="region" aria-label={`Round details for ${formatPlayedAt(game.playedAt)}`}>
+          <HistoryRoundDetails game={game} />
         </div>
       )}
     </div>

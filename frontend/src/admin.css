@@ -1,0 +1,545 @@
+/* Operations uses the same type and spacing, with flat, dense data sections. */
+
+.adminShell {
+  width: min(100%, 1280px);
+  margin-inline: auto;
+}
+
+.adminShell .topbar {
+  width: 100%;
+}
+
+.adminTopActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.adminLogin {
+  width: min(100%, 440px);
+  justify-self: start;
+  padding: var(--space-6);
+}
+
+.adminLogin h2 {
+  font-size: var(--type-section);
+}
+
+.adminLogin > p {
+  margin: 0;
+  font-size: var(--type-small);
+}
+
+.adminLogin form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+}
+
+.adminLogin label {
+  grid-column: 1 / -1;
+  font-size: var(--type-small);
+  font-weight: 500;
+}
+
+.adminDashboard {
+  display: grid;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.adminSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: var(--space-6) 0;
+  border-block: 1px solid var(--border);
+}
+
+.adminSummary div {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding-inline: var(--space-6);
+  border-left: 1px solid var(--border);
+}
+
+.adminSummary div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.adminSummary span {
+  color: var(--text-muted);
+  font-size: var(--type-small);
+}
+
+.adminSummary strong {
+  font-size: var(--type-title);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.adminError {
+  margin: 0;
+  padding: var(--space-3) 0;
+  color: var(--red);
+  font-size: var(--type-small);
+  overflow-wrap: anywhere;
+}
+
+.adminPanel {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+}
+
+.adminQueuePanel {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.adminPanelHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.adminPanelHeader > div {
+  min-width: 0;
+}
+
+.adminPanelHeader h2 {
+  margin: 0;
+  font-size: var(--type-section);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.adminQueueList, .adminRooms {
+  display: grid;
+  min-width: 0;
+}
+
+.adminQueueRow {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.6fr) minmax(100px, 0.6fr) minmax(0, 1.5fr) auto;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--type-small);
+  overflow-wrap: anywhere;
+}
+
+.adminQueueRow strong {
+  font-weight: 500;
+}
+
+.adminQueueRow span, .adminQueueRow time {
+  color: var(--text-muted);
+}
+
+.adminRooms {
+  gap: var(--space-6);
+}
+
+.roomCard {
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.roomCard .adminPanelHeader h2 {
+  font-size: var(--type-body);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+
+.roomTimes {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  text-align: right;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.participantGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+  padding-block: var(--space-4);
+  border-block: 1px solid var(--border);
+}
+
+.participantCard {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.participantCard + .participantCard {
+  padding-left: var(--space-6);
+  border-left: 1px solid var(--border);
+}
+
+.participantCard > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.participantCard strong {
+  font-size: var(--type-small);
+  font-weight: 500;
+}
+
+.participantCard span, .participantCard small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.adminFlags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.aiAdminStatus {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--border-strong);
+}
+
+.aiAdminStatus.failed {
+  border-left-color: var(--red);
+}
+
+.aiAdminStatus > div {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+}
+
+.aiAdminStatus span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.aiAdminStatus strong {
+  font-size: var(--type-small);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aiAdminStatus .aiAdminResponse, .aiAdminStatus .aiAdminError {
+  grid-column: 1 / -1;
+}
+
+.aiAdminError strong {
+  color: var(--red);
+}
+
+.transcript {
+  max-height: 440px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.transcriptMessage {
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.transcriptMessage:first-child {
+  padding-top: 0;
+}
+
+.transcriptMessage:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.transcriptMessage > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.transcriptMessage strong {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.transcriptMessage time {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcriptMessage p {
+  margin: var(--space-2) 0 0;
+  font-size: var(--type-small);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aiTranscriptMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.aiTranscriptMeta.failed {
+  color: var(--red);
+}
+
+.emptyTranscript, .emptyRooms p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--type-small);
+  line-height: 1.6;
+}
+
+.emptyRooms {
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+}
+
+.emptyRooms h2 {
+  margin: 0;
+  font-size: var(--type-body);
+  font-weight: 500;
+}
+
+/* The archive reuses player-history summaries, maps, and transcript logs. */
+
+.adminHistoryFilter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.adminHistoryFilter input {
+  width: 230px;
+  flex: 1 1 160px;
+}
+
+.adminHistoryList {
+  display: grid;
+  min-width: 0;
+}
+
+.adminHistoryRow {
+  display: grid;
+  grid-template-columns: 124px minmax(120px, 0.7fr) 82px 56px 76px minmax(0, 1.2fr) 68px;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--type-small);
+}
+
+.adminHistoryHead {
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+button.adminHistoryRow:hover, .adminHistoryEntry.expanded .adminHistoryRow {
+  background: var(--surface);
+}
+
+.adminHistoryWhen, .adminHistoryCount {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.adminHistoryPlayer {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+
+.adminHistoryTagCell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.historyLinkGlyph {
+  color: var(--text-faint);
+}
+
+.historyLinkGlyph.matched {
+  color: var(--blue);
+}
+
+.adminHistoryEntry {
+  min-width: 0;
+}
+
+.adminHistoryPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+}
+
+.adminHistoryPager span {
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--type-small);
+}
+
+@media (max-width: 1000px) {
+  .adminHistoryHead {
+    display: none;
+  }
+  .adminHistoryList {
+    border-top: 1px solid var(--border);
+  }
+  .adminHistoryRow {
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-areas: "when player player" "opponent read score" "detail detail count";
+  }
+  .adminHistoryWhen {
+    grid-area: when;
+  }
+  .adminHistoryPlayer {
+    grid-area: player;
+    text-align: right;
+  }
+  .adminHistoryTagCell {
+    grid-area: opponent;
+  }
+  .adminHistoryRead {
+    grid-area: read;
+  }
+  .adminHistoryScore {
+    grid-area: score;
+    text-align: right;
+  }
+  .adminHistoryRow .historyDetail {
+    grid-area: detail;
+  }
+  .adminHistoryCount {
+    grid-area: count;
+    text-align: right;
+  }
+  .adminHistory .historyChat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .adminShell .topbar {
+    align-items: start;
+    flex-direction: column;
+  }
+  .adminSummary div {
+    padding-inline: var(--space-3);
+  }
+  .adminSummary strong {
+    font-size: var(--type-section);
+  }
+  .adminQueueRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-4);
+  }
+  .participantGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+  .participantCard + .participantCard {
+    padding: var(--space-4) 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 560px) {
+  .adminLogin, .roomCard {
+    padding: var(--space-4);
+  }
+  .adminLogin form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .adminSummary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+  .adminSummary div, .adminSummary div:first-child {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border: 0;
+    padding: 0;
+  }
+  .adminSummary strong {
+    font-size: 1rem;
+  }
+  .aiAdminStatus {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .roomTimes {
+    text-align: left;
+  }
+  .adminHistoryRow {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas: "when count" "player player" "opponent read" "score score" "detail detail";
+    gap: var(--space-2);
+    padding-inline: 0;
+  }
+  .adminHistoryPlayer {
+    text-align: left;
+  }
+  .adminHistoryRead {
+    text-align: right;
+  }
+  .adminHistoryScore {
+    text-align: left;
+  }
+  .adminHistoryPager {
+    flex-wrap: wrap;
+  }
+  .adminHistoryPager span {
+    order: -1;
+    flex-basis: 100%;
+  }
+}

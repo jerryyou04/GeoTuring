@@ -1,0 +1,68 @@
+/* Map rendering and shared pin markers. */
+
+.guessMarker {
+  position: relative;
+}
+
+.guessMarker::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #ffffff;
+  border-radius: 50% 50% 50% 0;
+  background: var(--red);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  content: "";
+  transform: translateX(-50%) rotate(-45deg);
+}
+
+.guessMarker span {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: #ffffff;
+  transform: translateX(-50%);
+}
+
+.revealMarker {
+  position: relative;
+}
+
+.revealMarker::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  border: 3px solid #ffffff;
+  border-radius: 50% 50% 50% 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  content: "";
+  transform: translateX(-50%) rotate(-45deg);
+}
+
+.revealMarker.correct::before {
+  background: var(--green);
+}
+
+.revealMarker.guess::before {
+  background: var(--red);
+}
+
+.revealMarker span {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 1;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: #ffffff;
+  transform: translateX(-50%);
+}

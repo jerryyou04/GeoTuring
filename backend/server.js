@@ -167,6 +167,8 @@ function persistResultHistory(playerId, result, transcript = [], opponent = null
         : null,
       actualRegion: result.actual?.region || null,
       actualCountry: result.actual?.country || null,
+      actualLocation: result.actual?.participantType === "Human" ? result.actual : null,
+      opponentActualLocation: result.opponentActual?.participantType === "Human" ? result.opponentActual : null,
       opponentIdentityGuess: opponent?.identityGuess ?? null,
       opponentCorrectIdentity: opponent?.correctIdentity ?? null,
       opponentDistanceKm: opponent?.distanceKm ?? null,
@@ -258,7 +260,7 @@ function persistHumanGameHistory(session) {
 
       persistResultHistory(
         player.playerId,
-        player.result,
+        { ...player.result, opponentActual: revealHumanLocation(player.location) },
         buildStoredTranscript(session, socketId),
         buildOpponentGuessRecord(session, socketId),
       );
@@ -583,7 +585,7 @@ function completeAiSession(session) {
   Promise.allSettled(placePromises).then(() => {
     persistResultHistory(
       session.playerId,
-      session.result,
+      { ...session.result, opponentActual: revealHumanLocation(session.playerLocation || {}) },
       buildStoredTranscript(session, session.playerSocketId),
       buildAiOpponentRecord(session),
     );

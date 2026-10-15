@@ -4,9 +4,10 @@
   "description": "Minimal GeoTuring backend for Railway deployment.",
   "main": "server.js",
   "scripts": {
-    "test": "node --test test/queue.test.js test/leaderboard.test.js test/sessionHelpers.test.js test/socketOwnership.test.js test/aiCommon.test.js test/openRouterProvider.test.js test/db.test.js test/geocoding.test.js test/guessPlaceFlow.test.js",
+    "test": "node --test test/queue.test.js test/leaderboard.test.js test/sessionHelpers.test.js test/socketOwnership.test.js test/aiCommon.test.js test/openRouterProvider.test.js test/db.test.js test/geocoding.test.js test/guessPlaceFlow.test.js test/localStore.test.js",
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "dev:mock": "node dev/server.js"
   },
   "keywords": [],
   "author": "",
