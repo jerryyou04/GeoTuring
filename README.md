@@ -8,6 +8,11 @@ If you guess AI, pick the model family.
 
 **[Play GeoTuring](https://geoturing.com)** · [Configuration and deployment](docs/configuration.md)
 
+**The live game runs on Railway at [geoturing.com](https://geoturing.com).**
+Play there to join the public matchmaking pool. Local instances are for development
+and testing against AI or other players connected to your own backend, such as
+players on your local network. They do not join the live site's matchmaking pool.
+
 ## Features
 
 - **Human and AI matchmaking.** Match with another player or an OpenRouter-backed
@@ -71,6 +76,12 @@ npm run dev
 Open **http://localhost:5173**. The backend listens on **http://localhost:3000**.
 The browser asks for consent to estimate a rough location from your IP address.
 Use separate browser profiles to test two independent human players.
+
+For players on your local network, set the frontend's API and Socket.IO URLs to
+your backend's LAN address instead of `localhost`, and allow the frontend's origin
+with backend `FRONTEND_URL`. Everyone must connect to that same backend to match.
+Local AI replies are canned in demo mode; use the regular backend with an
+OpenRouter key to test live AI models.
 
 Demo mode supplies 32 synthetic leaderboard players, six sample rounds per new
 local player, and canned AI replies. Local changes persist in the ignored
