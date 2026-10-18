@@ -7,8 +7,19 @@ const {
 const { sha256 } = require("./utils");
 
 function registerAdminRoutes(app, { sessions, waitingQueue, db }) {
+  if (!ADMIN_API_PATH || !ADMIN_PASSWORD) {
+    return;
+  }
+
   const adminTokens = new Map();
   const adminPasswordHash = ADMIN_PASSWORD ? sha256(ADMIN_PASSWORD) : null;
+
+  // The client checks only the candidate path it is visiting. Never publish the
+  // configured path through a public configuration endpoint.
+  app.get(`${ADMIN_API_PATH}/status`, (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ enabled: true });
+  });
 
   app.post(`${ADMIN_API_PATH}/login`, (req, res) => {
     if (!adminPasswordHash) {

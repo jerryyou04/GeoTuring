@@ -3,12 +3,17 @@ const TURN_SECONDS = 25;
 const FINAL_GUESS_SECONDS = 25;
 const MATCH_FOUND_HOLD_MS = 1800;
 const RECONNECT_GRACE_MS = 5000;
+const ADMIN_URL = (process.env.ADMIN_URL || "").trim();
+
+if (ADMIN_URL && (!/^[a-zA-Z0-9_-]{1,128}$/.test(ADMIN_URL) || ["history", "leaderboard"].includes(ADMIN_URL.toLowerCase()))) {
+  throw new Error("ADMIN_URL must be a single URL segment using letters, numbers, hyphens, or underscores, excluding history and leaderboard.");
+}
 
 module.exports = {
   PORT: process.env.PORT || 3000,
   FRONTEND_URL: process.env.FRONTEND_URL || "*",
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "",
-  ADMIN_API_PATH: "/admin/host-monitor",
+  ADMIN_API_PATH: ADMIN_URL ? `/admin/${ADMIN_URL}` : "",
   ADMIN_TOKEN_TTL_MS: 12 * 60 * 60 * 1000,
   // The AI "connects" after a random wait in this range, so a match feels real
   // and variable instead of a fixed beat.

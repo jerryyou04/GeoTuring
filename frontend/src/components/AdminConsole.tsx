@@ -25,6 +25,30 @@ import { StatusPill } from "./StatusPill";
 import { roundStatus } from "./HistoryDetail";
 import { HistoryRoundDetails } from "./HistoryRoundDetails";
 
+export function AdminEntry() {
+  const [state, setState] = useState<"checking" | "enabled" | "missing" | "unavailable">("checking");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API_URL}${ADMIN_API_PATH}/status`, { signal: controller.signal, cache: "no-store" })
+      .then(async response => {
+        const nextState = response.status === 404 ? "missing"
+          : response.ok && (await response.json()).enabled === true ? "enabled" : "unavailable";
+        if (!controller.signal.aborted) setState(nextState);
+      })
+      .catch(() => { if (!controller.signal.aborted) setState("unavailable"); });
+    return () => controller.abort();
+  }, []);
+
+  if (state === "enabled") return <AdminConsole />;
+
+  return <main className="appShell adminShell"><section className="centerPanel adminLogin">
+    <h1>{state === "checking" ? "Loading" : state === "missing" ? "Page not found" : "Page unavailable"}</h1>
+    {state === "unavailable" && <p>Please try again shortly.</p>}
+    <a href="/">Back to GeoTuring</a>
+  </section></main>;
+}
+
 export function AdminConsole() {
   const [password, setPassword] = useState("");
   const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "");

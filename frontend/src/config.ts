@@ -8,10 +8,14 @@ export const IP_LOCATION_STORAGE_KEY = "geoturing:ip-location:v1";
 export const PLAYER_ID_STORAGE_KEY = "geoturing:player-id:v1";
 export const NAME_STORAGE_KEY = "geoturing:name:v1";
 export const ACTIVE_SESSION_STORAGE_KEY = "geoturing:active-session:v1";
-export const ADMIN_CONSOLE_PATH = "/host-monitor";
+const candidatePath = typeof window === "undefined" ? "" : (window.location.pathname || "/").replace(/\/$/, "");
+const candidateSlug = candidatePath.slice(1);
+const adminSlug = /^\/[a-zA-Z0-9_-]{1,128}$/.test(candidatePath)
+  && !["history", "leaderboard"].includes(candidateSlug.toLowerCase()) ? candidateSlug : "";
+export const ADMIN_CONSOLE_PATH = adminSlug ? `/${adminSlug}` : "";
 export const HISTORY_PATH = "/history";
 export const LEADERBOARD_PATH = "/leaderboard";
-export const ADMIN_API_PATH = "/admin/host-monitor";
+export const ADMIN_API_PATH = adminSlug ? `/admin/${adminSlug}` : "";
 export const ADMIN_TOKEN_STORAGE_KEY = "geoturing:admin-token:v1";
 export const MIN_MESSAGES_PER_SIDE = 2;
 export const TURN_SECONDS = 25;

@@ -25,6 +25,8 @@ npm run dev
 ```
 
 The backend runs on `http://localhost:3000` by default.
+`npm run dev` uses Node's built-in watch mode to restart when imported server
+files change (requires Node 18.11 or newer).
 
 Frontend:
 
@@ -76,8 +78,13 @@ Backend:
 - `PORT` - server port. Railway provides this automatically in production.
 - `FRONTEND_URL` - allowed CORS origin, such as `http://localhost:5173` or
   `https://geoturing.com`.
-- `ADMIN_PASSWORD` - required password for the room monitor at
-  `/host-monitor`. Admin endpoints are disabled when this is unset.
+- `ADMIN_URL` - host-chosen admin URL segment, for example `host-monitor`.
+  Use 1–128 letters, numbers, hyphens, or underscores, without a leading slash.
+  Admin endpoints are disabled when this or `ADMIN_PASSWORD` is unset.
+  The frontend needs no admin variable. Avoid the public routes `history` and
+  `leaderboard`.
+- `ADMIN_PASSWORD` - required password for the room monitor. Keep this variable
+  on the backend service only.
 - `OPENROUTER_API_KEY` - enables real AI chat opponents through OpenRouter. If
   unset, the backend falls back to local canned replies for development.
 - `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` - optional OpenRouter app
@@ -164,9 +171,11 @@ Frontend service:
 
 - `GET /` - basic API status
 - `GET /health` - deployment health check returning `{ "ok": true }`
-- `POST /admin/host-monitor/login` - admin login with
+- `GET /admin/<ADMIN_URL>/status` - confirms that the requested admin path is
+  enabled; returns no room, player, or configuration data.
+- `POST /admin/<ADMIN_URL>/login` - admin login with
   `{ "password": "..." }`
-- `GET /admin/host-monitor/rooms` - authenticated room, queue, and
+- `GET /admin/<ADMIN_URL>/rooms` - authenticated room, queue, and
   transcript snapshot
 
 ## Reverse-Geocoding Attribution
@@ -187,11 +196,15 @@ the attribution and quota requirements of the selected Geoapify plan.
 
 ## Admin Room Monitor
 
-Visit `/host-monitor` on the frontend and log in with
-`ADMIN_PASSWORD`. The monitor shows waiting players, active human/AI rooms,
+Set `ADMIN_URL` on the Railway backend to a host-chosen URL segment. Redeploy the
+backend, visit `/<ADMIN_URL>` on the frontend, and log in with `ADMIN_PASSWORD`.
+The frontend checks the requested path with the backend; no frontend admin
+environment variable or rebuild is needed when changing the configured path.
+The monitor shows waiting players, active human/AI rooms,
 participant status, rough locations, and chat transcripts for live testing.
-The obscure path is only for convenience; the backend password check is the
-actual access control.
+The chosen path is absent from the source and browser bundle. It is visible to
+anyone who knows or visits it, and a correct guess can be confirmed through the
+status endpoint. The backend password check is the access control.
 
 ## Current TODOs
 

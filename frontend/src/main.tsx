@@ -56,7 +56,7 @@ import {
   savePersistentScore,
   saveScoredSessionIds,
 } from "./storage";
-import { AdminConsole } from "./components/AdminConsole";
+import { AdminEntry } from "./components/AdminConsole";
 import { ChatRoom } from "./components/ChatRoom";
 import { History } from "./components/History";
 import { Leaderboard } from "./components/Leaderboard";
@@ -77,10 +77,10 @@ import { RoundLayout } from "./components/RoundLayout";
 const RECONNECT_UI_GRACE_MS = 5000;
 
 function App() {
-  const path = window.location.pathname;
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
 
   if (path === ADMIN_CONSOLE_PATH) {
-    return <AdminConsole />;
+    return <AdminEntry />;
   }
 
   if (path === HISTORY_PATH) {
