@@ -25,7 +25,7 @@ import { StatusPill } from "./StatusPill";
 import { roundStatus } from "./HistoryDetail";
 import { HistoryRoundDetails } from "./HistoryRoundDetails";
 
-export function AdminEntry() {
+export function AdminEntry({ fallback }: { fallback: React.ReactNode }) {
   const [state, setState] = useState<"checking" | "enabled" | "missing" | "unavailable">("checking");
 
   useEffect(() => {
@@ -41,9 +41,10 @@ export function AdminEntry() {
   }, []);
 
   if (state === "enabled") return <AdminConsole />;
+  if (state === "missing") return <>{fallback}</>;
 
   return <main className="appShell adminShell"><section className="centerPanel adminLogin">
-    <h1>{state === "checking" ? "Loading" : state === "missing" ? "Page not found" : "Page unavailable"}</h1>
+    <h1>{state === "checking" ? "Loading" : "Page unavailable"}</h1>
     {state === "unavailable" && <p>Please try again shortly.</p>}
     <a href="/">Back to GeoTuring</a>
   </section></main>;

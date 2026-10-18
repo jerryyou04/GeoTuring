@@ -80,7 +80,7 @@ function App() {
   const path = window.location.pathname.replace(/\/$/, "") || "/";
 
   if (path === ADMIN_CONSOLE_PATH) {
-    return <AdminEntry />;
+    return <AdminEntry fallback={<GameApp />} />;
   }
 
   if (path === HISTORY_PATH) {
