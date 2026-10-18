@@ -33,6 +33,9 @@ If you guess AI, pick the model family.
 | Leaderboard | Redis | Ranked player statistics and display names |
 | External services | OpenRouter, ipapi.co, Geoapify / Nominatim, OpenStreetMap tiles | AI replies, rough IP location, place labels, and maps |
 
+The live frontend (`geoturing.com`) and backend (`api.geoturing.com`) run as
+separate services on Railway.
+
 Live sessions are held in backend memory; completed rounds are saved separately.
 The current implementation is designed for one backend instance. Horizontal scaling would require
 shared session state and coordination between Socket.IO servers.
