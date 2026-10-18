@@ -1,212 +1,128 @@
 # GeoTuring
 
-GeoTuring is a real-time social deduction web game. A player chats anonymously
-with either a human-like participant or an AI-like participant, then guesses who
-they were talking to. Human guesses continue into a lightweight GeoGuessr-style
-map pin; AI guesses continue into a model-family pick.
+<img src="frontend/public/geoturing-logo.svg" width="72" alt="GeoTuring globe logo">
 
-This repo is intentionally small for the MVP:
+A real-time social deduction game: chat anonymously, then decide whether your
+opponent is human or AI. If you guess human, pin their rough location on a map.
+If you guess AI, pick the model family.
 
-- `backend/` - Express + Socket.IO API for Railway at `api.geoturing.com`
-- `frontend/` - Vite React client for Railway at `geoturing.com`
-- In-memory sessions only
-- Human matchmaking with OpenRouter-backed AI fallback
-- No login, payments, database, or Mapbox yet
+**[Play GeoTuring](https://geoturing.com)** · [Configuration and deployment](docs/configuration.md)
 
-## Local Development
+## Features
 
-Backend:
+- **Human and AI matchmaking.** Match with another player or an OpenRouter-backed
+  opponent from the ChatGPT, Gemini, Claude, or Grok model families.
+- **Timed, turn-based conversations.** Server-controlled turns, early round locking,
+  final-guess deadlines, and acknowledgements for message delivery.
+- **Session recovery.** Restore conversations after a refresh or reconnect, transfer
+  ownership between tabs, and prevent duplicate messages from retries.
+- **Map-based reveals.** Compare location guesses with rough actual locations using
+  Leaflet, with server-generated place labels and two perspectives in saved rounds.
+- **History and leaderboard.** PostgreSQL stores completed rounds and transcripts;
+  Redis maintains a paginated leaderboard. A device-local scoreboard tracks results.
+- **Host tools.** An optional password-protected console shows queued players,
+  live conversations, and completed rounds. Its URL is configured on the backend.
+
+## Architecture
+
+| Layer | Technology | Responsibility |
+| --- | --- | --- |
+| Frontend | React 19, TypeScript, Vite, Leaflet | Game screens, maps, client state, and reconnect handling |
+| Backend | Node.js, Express, Socket.IO | Matchmaking, timers, turn ownership, scoring, and AI orchestration |
+| History | PostgreSQL | Completed rounds, transcripts, and guess/reveal coordinates |
+| Leaderboard | Redis | Ranked player statistics and display names |
+| External services | OpenRouter, ipapi.co, Geoapify / Nominatim, OpenStreetMap tiles | AI replies, rough IP location, place labels, and maps |
+
+Live sessions are held in backend memory; completed rounds are saved separately.
+The current implementation is designed for one backend instance. Horizontal scaling would require
+shared session state and coordination between Socket.IO servers.
+
+## Run locally
+
+Use Node.js **22.12 or newer** and npm. The local demo needs no PostgreSQL, Redis,
+or AI API key.
+
+```bash
+git clone https://github.com/jerryyou04/GeoTuring.git
+cd GeoTuring
+```
+
+Start the demo backend in one terminal:
 
 ```bash
 cd backend
-npm install
+npm ci
 cp .env.example .env
-npm run dev
+npm run dev:mock
 ```
 
-The backend runs on `http://localhost:3000` by default.
-`npm run dev` uses Node's built-in watch mode to restart when imported server
-files change (requires Node 18.11 or newer).
-
-Frontend:
+Start the frontend in another terminal, from the repository root:
 
 ```bash
 cd frontend
-npm install
+npm ci
 cp .env.example .env
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173` by default.
+Open **http://localhost:5173**. The backend listens on **http://localhost:3000**.
+The browser asks for consent to estimate a rough location from your IP address.
+Use separate browser profiles to test two independent human players.
 
-### Local sample data without Postgres or Redis
+Demo mode supplies 32 synthetic leaderboard players, six sample rounds per new
+local player, and canned AI replies. Local changes persist in the ignored
+`backend/.local/mock-data.json` file; stop the backend and delete that file to reset
+it. Demo mode refuses to run in production or on Railway.
 
-Run `npm run dev:mock` from `backend/` instead of the normal backend command.
-Use the same frontend and API URLs. This separate local entry point supplies
-32 synthetic leaderboard players and six sample rounds for each new local
-player, including human/AI outcomes and expandable chat transcripts.
+For the regular backend, use `npm run dev` instead. Add `OPENROUTER_API_KEY` for
+live AI opponents, and `DATABASE_URL` plus `REDIS_URL` for persistent history and
+leaderboard statistics. See [configuration](docs/configuration.md) for all options.
 
-Completed rounds and display-name changes are saved in the ignored
-`backend/.local/mock-data.json` file and survive backend restarts. Stop the
-backend and remove that file to reset the sample data. This mode uses local
-canned AI replies and does not connect to Postgres, Redis, or OpenRouter.
-`npm start` and `npm run dev` retain the regular production storage behavior;
-`dev:mock` refuses to run with `NODE_ENV=production` or in Railway.
+## Validation
 
-## Regression Testing
+Run these commands from the repository root:
 
-Run `npm test` in `frontend` for the scoreboard persistence and History map regression tests,
-`npm run build` there for the production bundle, and `npm test` in `backend`
-for the existing server suite.
+```bash
+npm --prefix backend test
+npm --prefix frontend test
+npm --prefix frontend run build
+```
 
-For deliberate live two-player checks, use two isolated browser profiles. If
-only one profile is available, `npm run test:production-proxy` in `frontend`
-serves the deployed frontend unchanged on a fresh loopback origin; it still
-connects to the production backend. Playing through that page creates real
-production games. See the [production E2E report](docs/qa/production-e2e-2026-10-14.md)
-for the paired-player procedure, verified cases, and known limitations.
+The automated suites cover matchmaking, socket ownership and reconnection,
+message IDs, admin route configuration and authentication, AI prompt construction,
+history persistence, leaderboard pagination, reverse geocoding, map rendering
+conditions, and scoreboard storage. They run without production credentials.
 
-The [History map fix verification](docs/qa/history-map-fixes-e2e-2026-10-14.md)
-records the updated frontend's isolated two-player and AI gameplay checks,
-mobile layouts, and shared admin archive checks. These browser checks are
-manual; the component/storage and backend suites run automatically.
+Manual browser checks are documented separately:
 
-## Environment Variables
+- [Production gameplay and responsive QA](docs/qa/production-e2e-2026-10-14.md)
+- [History map regression checks](docs/qa/history-map-fixes-e2e-2026-10-14.md)
 
-Backend:
+## Game rules and implementation choices
 
-- `PORT` - server port. Railway provides this automatically in production.
-- `FRONTEND_URL` - allowed CORS origin, such as `http://localhost:5173` or
-  `https://geoturing.com`.
-- `ADMIN_URL` - host-chosen admin URL segment, for example `host-monitor`.
-  Use 1–128 letters, numbers, hyphens, or underscores, without a leading slash.
-  Admin endpoints are disabled when this or `ADMIN_PASSWORD` is unset.
-  The frontend needs no admin variable. Avoid the public routes `history` and
-  `leaderboard`.
-- `ADMIN_PASSWORD` - required password for the room monitor. Keep this variable
-  on the backend service only.
-- `OPENROUTER_API_KEY` - enables real AI chat opponents through OpenRouter. If
-  unset, the backend falls back to local canned replies for development.
-- `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` - optional OpenRouter app
-  attribution headers.
-- `OPENROUTER_MODEL_CHATGPT`, `OPENROUTER_MODEL_GEMINI`,
-  `OPENROUTER_MODEL_CLAUDE`, `OPENROUTER_MODEL_GROK` - optional model slug
-  overrides for each in-game AI family.
-- `GEOAPIFY_API_KEY` - optional server-side key for managed reverse geocoding of
-  location guesses. When unset, the backend uses the public OpenStreetMap
-  Nominatim endpoint with caching and a global one-request-per-second limit.
-- `GEOCODING_BASE_URL` - optional reverse-geocoding endpoint override for the
-  selected provider.
-- `GEOCODING_USER_AGENT` - identifying application User-Agent sent to the
-  geocoder. Set this to an application name and contact URL/email when using
-  public Nominatim; it defaults to an identifying GeoTuring User-Agent.
-- `GEOCODING_TIMEOUT_MS` - optional end-to-end lookup timeout in milliseconds,
-  including any public-provider rate-limit wait (default `2500`).
-- `GEOCODING_CACHE_MAX_ENTRIES`, `GEOCODING_CACHE_GRID_DEGREES`,
-  `GEOCODING_CACHE_TTL_MS`, and `GEOCODING_UNAVAILABLE_CACHE_TTL_MS` - optional
-  in-memory reverse-geocode cache tuning.
-- `GEOCODING_MAX_RESULT_DISTANCE_KM` - optional cutoff used when a provider
-  supplies enough distance information to detect an implausible nearest-land
-  result (default `100`).
+Each completed round awards an identity-read score of **0 or 1**. A human round
+also awards **0.0–1.0** location points based on haversine distance, rounded to one
+decimal. An AI round awards **0 or 1** model points, requiring both a correct AI
+identity guess and the exact model family.
 
-Frontend:
+Players use an anonymous browser-stored ID, with no account signup. Human locations
+are estimated from IP addresses and rounded to one decimal before storage or
+reveal. Active matches do not survive a backend restart; completed history does
+when PostgreSQL is configured. AI provider credentials stay on the backend.
 
-- `NEXT_PUBLIC_API_URL` - backend HTTP URL, such as `http://localhost:3000` or
-  `https://api.geoturing.com`.
-- `NEXT_PUBLIC_SOCKET_URL` - backend Socket.IO URL. Usually the same value as
-  `NEXT_PUBLIC_API_URL`.
+## Repository layout
 
-The Vite aliases `VITE_API_URL` and `VITE_SOCKET_URL` are also supported for
-local development.
+```text
+backend/
+  ai/          AI personas, prompts, and provider adapters
+  dev/         Local demo server, synthetic fixtures, and file-backed storage
+  test/        Backend regression tests
+frontend/
+  src/         React screens, maps, styles, and browser storage
+  test/        Frontend configuration, map, and storage regression tests
+docs/
+  qa/          Manual browser verification reports
+```
 
-## Socket Events
-
-- `queue:join` - player enters matchmaking
-- `session:created` - backend returns a new session
-- `chat:message` - player sends a chat message
-- `partner:message` - anonymous human or AI partner sends a chat message
-- `guess:submit` - player submits identity and secondary guess
-- `session:result` - backend returns score and reveal data
-
-## Scoring
-
-Each round returns a read score plus a type-specific round score:
-
-- Read score: `0/1` or `1/1` for correctly identifying Human vs AI.
-- Human round score: `0/100` through `100/100`, based on haversine distance
-  from the actual location.
-- AI round score: `0/1` or `1/1`. The point requires correctly identifying the
-  participant as AI and guessing the exact model family.
-
-## Railway Deployment
-
-Create two Railway services from this repo:
-
-- Backend service root directory: `backend`
-- Frontend service root directory: `frontend`
-
-Backend service:
-
-- Start command: `npm start`
-- Set `FRONTEND_URL=https://geoturing.com`
-- Set `OPENROUTER_API_KEY` to the backend service variable in Railway.
-- For production reverse-geocoding volume, set `GEOAPIFY_API_KEY`. Without it,
-  the low-volume Nominatim fallback remains functional and rate-limited.
-- Railway should route `api.geoturing.com` to this service.
-
-Frontend service:
-
-- Build command: `npm run build`
-- Start command: `npm start`
-- Set `NEXT_PUBLIC_API_URL=https://api.geoturing.com`
-- Set `NEXT_PUBLIC_SOCKET_URL=https://api.geoturing.com`
-- Railway should route `geoturing.com` to this service.
-
-## Domain Layout
-
-- `geoturing.com` -> frontend
-- `api.geoturing.com` -> backend
-
-## API Endpoints
-
-- `GET /` - basic API status
-- `GET /health` - deployment health check returning `{ "ok": true }`
-- `GET /admin/<ADMIN_URL>/status` - confirms that the requested admin path is
-  enabled; returns no room, player, or configuration data.
-- `POST /admin/<ADMIN_URL>/login` - admin login with
-  `{ "password": "..." }`
-- `GET /admin/<ADMIN_URL>/rooms` - authenticated room, queue, and
-  transcript snapshot
-
-## Reverse-Geocoding Attribution
-
-Expanded History rounds include a small guess-versus-actual map. New completed
-rounds persist both revealed rough locations alongside the guess pins; the
-required nullable columns are added by `initDb()` on backend startup. Older rows
-keep their saved pins and place labels, but cannot reconstruct actual coordinates
-that were never recorded.
-
-Guess coordinates are reverse-geocoded by the backend into concise place names;
-provider credentials never belong in the frontend. Without `GEOAPIFY_API_KEY`,
-the fallback uses Nominatim and OpenStreetMap data. Keep visible
-[OpenStreetMap attribution](https://www.openstreetmap.org/copyright) anywhere
-those labels or map data are presented, retain the identifying User-Agent, and
-respect the public Nominatim usage limits. If Geoapify is enabled, also follow
-the attribution and quota requirements of the selected Geoapify plan.
-
-## Admin Room Monitor
-
-Set `ADMIN_URL` on the Railway backend to a host-chosen URL segment. Redeploy the
-backend, visit `/<ADMIN_URL>` on the frontend, and log in with `ADMIN_PASSWORD`.
-The frontend checks the requested path with the backend; no frontend admin
-environment variable or rebuild is needed when changing the configured path.
-The monitor shows waiting players, active human/AI rooms,
-participant status, rough locations, and chat transcripts for live testing.
-The chosen path is absent from the source and browser bundle. It is visible to
-anyone who knows or visits it, and a correct guess can be confirmed through the
-status endpoint. The backend password check is the access control.
-
-## Current TODOs
-
-- Replace simulated human opponents with real human matchmaking.
-- Add persistent game history once the MVP flow is stable.
+Deployment, environment variables, admin setup, API routes, and map attribution
+are covered in [configuration and deployment](docs/configuration.md).
