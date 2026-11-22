@@ -1,4 +1,5 @@
 const { buildAiReplyResult, hasChatMessages, pick } = require("./common");
+const { isMessageHostile } = require("./hostility");
 
 const AI_PERSONAS = {
   ChatGPT: [
@@ -47,11 +48,6 @@ const CLAPBACK_LINES = [
   "imagine being this pressed",
 ];
 
-const HOSTILE_TRIGGERS = [
-  "stupid", "idiot", "loser", "ugly", "shut up", "fuck you", "f you", "hate you",
-  "kill", "creep", "young girl", "retard", "dumbass", "threat", "dox",
-];
-
 function createMockAiProvider(modelFamily, persona) {
   const lines = AI_PERSONAS[modelFamily] || AI_PERSONAS.ChatGPT;
 
@@ -65,7 +61,7 @@ function createMockAiProvider(modelFamily, persona) {
       const lastMessage = messages[messages.length - 1]?.text || "";
       const normalized = lastMessage.toLowerCase();
 
-      if (isHostile(normalized)) {
+      if (isMessageHostile(normalized)) {
         return buildLocalReply(applyCasing(pick(CLAPBACK_LINES), persona));
       }
 
@@ -154,10 +150,6 @@ function applyCasing(text, persona) {
   }
 
   return text;
-}
-
-function isHostile(text) {
-  return HOSTILE_TRIGGERS.some((trigger) => text.includes(trigger));
 }
 
 module.exports = {

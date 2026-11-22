@@ -25,6 +25,7 @@ const {
   TURN_MS,
 } = require("./config");
 const { clamp, pick, randomInt } = require("./utils");
+const { isMessageHostile } = require("./ai/hostility");
 
 // WPM is measured against the standard of 5 characters per word (incl. spaces).
 const CHARS_PER_WORD = 5;
@@ -139,14 +140,6 @@ function markAiResponseStatus(session, updates) {
   };
 }
 
-// Provider-agnostic hostility detection used to bias the lock decision (#4).
-// Mirrors the mock provider's clapback triggers but lives here so it applies to
-// every adapter, not just the mock one.
-const HOSTILE_TRIGGERS = [
-  "stupid", "idiot", "loser", "ugly", "shut up", "fuck you", "f you", "hate you",
-  "kill", "creep", "young girl", "retard", "dumbass", "threat", "dox",
-];
-
 // Natural, casual sign-offs a real person sends before bailing — deliberately
 // NOT meta about the game/guessing. Kept varied to avoid obvious repetition.
 const LOCK_SIGNOFF_LINES = [
@@ -167,11 +160,6 @@ const LOCK_SIGNOFF_LINES = [
   "alright catch you later",
   "welp im off",
 ];
-
-function isMessageHostile(text) {
-  const normalized = String(text || "").toLowerCase();
-  return HOSTILE_TRIGGERS.some((trigger) => normalized.includes(trigger));
-}
 
 // Varied delay before the lock fires. Spans into the human's turn, so it is not
 // clamped to the AI turn budget — only to a sane min/max kept under TURN_MS.

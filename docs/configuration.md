@@ -15,6 +15,7 @@ in the hosting service's environment, with credentials on the backend only.
 | `OPENROUTER_API_KEY` | Enables live AI replies. Without it, opponents use canned development replies. |
 | `OPENROUTER_CHAT_PROMPT` | Complete chat system prompt, configured privately on the backend. Missing or blank values use canned fallback replies without calling OpenRouter. |
 | `OPENROUTER_GUESS_PROMPT` | Complete final-guess system prompt. Missing or blank values make the AI's final guess unavailable without calling OpenRouter. |
+| `AI_HOSTILE_TRIGGERS` | Private JSON array of keywords/phrases used by backend hostility detection. Missing, blank, or `[]` disables keyword detection. Invalid JSON or entries prevent startup. |
 | `ADMIN_URL` | Optional host-chosen admin URL segment. No leading slash; use 1–128 letters, numbers, hyphens, or underscores. `history` and `leaderboard` are reserved. |
 | `ADMIN_PASSWORD` | Admin login password. Admin routes are registered only when both this and `ADMIN_URL` are nonempty. |
 | `GEOAPIFY_API_KEY` | Optional managed reverse-geocoding provider; otherwise the backend uses its rate-limited Nominatim fallback. |
@@ -56,6 +57,24 @@ The final-guess prompt is passed through verbatim. It must request JSON with
 `verdict` (`human` or `ai`), `latitude`, `longitude`, `model` (one of the four
 in-game families, or null), and `reason`. The server supplies the labelled
 conversation transcript separately.
+
+### Private hostility triggers
+
+Set `AI_HOSTILE_TRIGGERS` on the Railway backend service before deploying the
+configuration change. Paste the JSON array directly as the variable value,
+including the square brackets and double quotes around each string. Keep the
+production list in private configuration. A neutral format example is
+`["example phrase", "another phrase"]`.
+
+The backend reads this list at startup, trims and lowercases entries, and checks
+whether the lowercased message contains any entry. Substring matching is
+preserved. Both AI early-lock decisions and the local fallback provider use the
+same detection function. The list is not sent to OpenRouter or the browser.
+
+Missing, blank, or `[]` values disable keyword detection while normal AI locking
+continues. Malformed JSON, non-array values, and entries that are not nonempty
+strings prevent startup with a configuration error. Redeploy or restart the
+backend after changing the variable.
 
 ### Reverse-geocoding options
 
