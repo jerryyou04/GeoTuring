@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const modulePaths = ["../ai/hostility", "../aiRuntime", "../ai/mockProvider"];
+const modulePaths = ["../ai/hostility", "../aiRuntime"];
 
 function configuredDetection(t, value) {
   const original = process.env.AI_HOSTILE_TRIGGERS;
@@ -16,7 +16,6 @@ function configuredDetection(t, value) {
     return {
       ...require("../ai/hostility"),
       ...require("../aiRuntime"),
-      ...require("../ai/mockProvider"),
     };
   } finally {
     if (original === undefined) delete process.env.AI_HOSTILE_TRIGGERS;
@@ -82,20 +81,4 @@ test("disabled keyword detection leaves ordinary early-lock probability active",
 
   assert.equal(plan.lock, true);
   assert.equal(plan.viaHostile, false);
-});
-
-test("the mock provider uses the same configured keywords for its reply selection", (t) => {
-  const { createMockAiProvider } = configuredDetection(t, '["signal phrase"]');
-  const provider = createMockAiProvider("ChatGPT", {
-    location: { city: "Dublin", country: "Ireland" },
-    locationDisclosure: "direct",
-  });
-
-  const normal = provider.generateReply([{ author: "player", text: "where are you from?" }]);
-  const triggered = provider.generateReply([{ author: "player", text: "where are you from? SIGNAL PHRASE" }]);
-
-  assert.match(normal.text, /Dublin/i);
-  assert.doesNotMatch(triggered.text, /Dublin/i);
-  assert.ok(triggered.text);
-  assert.equal(triggered.source, "local");
 });

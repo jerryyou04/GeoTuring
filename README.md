@@ -47,8 +47,8 @@ shared session state and coordination between Socket.IO servers.
 
 ## Run locally
 
-Use Node.js **22.12 or newer** and npm. The local demo needs no PostgreSQL, Redis,
-or AI API key.
+Use Node.js **22.12 or newer** and npm. The local demo needs no PostgreSQL or
+Redis. AI conversations require an OpenRouter API key and configured prompts.
 
 ```bash
 git clone https://github.com/jerryyou04/GeoTuring.git
@@ -80,11 +80,12 @@ Use separate browser profiles to test two independent human players.
 For players on your local network, set the frontend's API and Socket.IO URLs to
 your backend's LAN address instead of `localhost`, and allow the frontend's origin
 with backend `FRONTEND_URL`. Everyone must connect to that same backend to match.
-Local AI replies are canned in demo mode; use the regular backend with an
-OpenRouter key to test live AI models.
+Both backend modes use OpenRouter for AI conversations. Configure
+`OPENROUTER_API_KEY`, `OPENROUTER_CHAT_PROMPT`, and `OPENROUTER_GUESS_PROMPT`
+to play against AI. Two human players can still play without AI credentials.
 
 Demo mode supplies 32 synthetic leaderboard players, six sample rounds per new
-local player, and canned AI replies. Local changes persist in the ignored
+local player. Local changes persist in the ignored
 `backend/.local/mock-data.json` file; stop the backend and delete that file to reset
 it. Demo mode refuses to run in production or on Railway.
 
@@ -92,6 +93,11 @@ For the regular backend, use `npm run dev` instead. Add `OPENROUTER_API_KEY`,
 `OPENROUTER_CHAT_PROMPT`, and `OPENROUTER_GUESS_PROMPT` for
 live AI opponents, and `DATABASE_URL` plus `REDIS_URL` for persistent history and
 leaderboard statistics. See [configuration](docs/configuration.md) for all options.
+
+AI replies have no canned fallback. Missing credentials/prompts, provider errors,
+and unusable replies end the affected round with an unavailable message and no
+score. A failed AI final guess is shown as unavailable in an otherwise completed
+round.
 
 ## Validation
 

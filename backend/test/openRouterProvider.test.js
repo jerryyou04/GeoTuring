@@ -2,6 +2,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createOpenRouterAiProvider } = require("../ai/openRouterProvider");
 
+let savedApiKey;
+test.beforeEach(() => {
+  savedApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-key";
+});
+test.afterEach(() => {
+  if (savedApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+  else process.env.OPENROUTER_API_KEY = savedApiKey;
+});
+
 const UTC_WEEKDAYS = [
   "Sunday",
   "Monday",
@@ -14,21 +24,14 @@ const UTC_WEEKDAYS = [
 
 test("OpenRouter chat prompts include an internally consistent authoritative UTC clock", async (t) => {
   const originalFetch = global.fetch;
-  const originalApiKey = process.env.OPENROUTER_API_KEY;
   setPrompt(t, "OPENROUTER_CHAT_PROMPT", "Private chat instructions. {{CLOCK_CONTEXT}} {{PERSONA_INSTRUCTIONS}} {{#OPENING}}Start the conversation.{{/OPENING}}{{#REPLY}}Reply to the conversation.{{/REPLY}}");
   let requestBody = null;
 
   t.after(() => {
     global.fetch = originalFetch;
 
-    if (originalApiKey === undefined) {
-      delete process.env.OPENROUTER_API_KEY;
-    } else {
-      process.env.OPENROUTER_API_KEY = originalApiKey;
-    }
   });
 
-  process.env.OPENROUTER_API_KEY = "test-key";
   global.fetch = async (url, options) => {
     requestBody = JSON.parse(options.body);
 
@@ -120,20 +123,13 @@ test("OpenRouter uses the configured final-guess prompt verbatim and supplies th
   const configuredPrompt = "Private final-guess instructions.\nReturn a JSON verdict with a reason.";
   setPrompt(t, "OPENROUTER_GUESS_PROMPT", configuredPrompt);
   const originalFetch = global.fetch;
-  const originalApiKey = process.env.OPENROUTER_API_KEY;
   let requestBody = null;
 
   t.after(() => {
     global.fetch = originalFetch;
 
-    if (originalApiKey === undefined) {
-      delete process.env.OPENROUTER_API_KEY;
-    } else {
-      process.env.OPENROUTER_API_KEY = originalApiKey;
-    }
   });
 
-  process.env.OPENROUTER_API_KEY = "test-key";
   global.fetch = async (url, options) => {
     requestBody = JSON.parse(options.body);
 
@@ -217,7 +213,7 @@ test("chat prompt values pass through verbatim without template markers", async 
 });
 
 for (const prompt of [undefined, "", " \n ", "Unrecognized {{UNKNOWN_CONTEXT}}", "{{#OPENING}}Unclosed block"]) {
-  test(`missing, blank, or invalid chat configuration uses fallback (${JSON.stringify(prompt)})`, async (t) => {
+  test(`missing, blank, or invalid chat configuration reports failure (${JSON.stringify(prompt)})`, async (t) => {
     setPrompt(t, "OPENROUTER_CHAT_PROMPT", prompt);
     const fetchMock = t.mock.method(global, "fetch", async () => {
       throw new Error("OpenRouter must not be called with an invalid prompt");
@@ -225,7 +221,9 @@ for (const prompt of [undefined, "", " \n ", "Unrecognized {{UNKNOWN_CONTEXT}}",
 
     const result = await createOpenRouterAiProvider("ChatGPT", null).generateReply([]);
 
-    assert.ok(result.text);
+    assert.equal(result.text, "");
+    assert.equal(result.failed, true);
+    assert.equal(result.source, "openrouter");
     assert.match(result.error, /OPENROUTER_CHAT_PROMPT/);
     assert.equal(fetchMock.mock.calls.length, 0);
   });
@@ -242,6 +240,69 @@ test("missing final-guess configuration makes the guess unavailable without an A
   assert.equal(result.failed, true);
   assert.equal(result.error, "OPENROUTER_GUESS_PROMPT is not configured.");
   assert.equal(fetchMock.mock.calls.length, 0);
+});
+
+test("missing credentials fail chat and final guesses without any API request", async (t) => {
+  setPrompt(t, "OPENROUTER_API_KEY", " \n ");
+  const fetchMock = t.mock.method(global, "fetch", async () => assert.fail("No request should be sent"));
+  const provider = createOpenRouterAiProvider("ChatGPT", null);
+
+  const chat = await provider.generateReply([]);
+  const guess = await provider.generateGuess([]);
+
+  assert.equal(chat.failed, true);
+  assert.equal(chat.text, "");
+  assert.equal(guess.failed, true);
+  assert.equal(chat.error, "OPENROUTER_API_KEY is not configured.");
+  assert.equal(guess.error, chat.error);
+  assert.equal(fetchMock.mock.calls.length, 0);
+});
+
+for (const failure of ["network", "http", "empty", "invalid-json"]) {
+  test(`${failure} failures return no substitute reply and clear the request timer`, async (t) => {
+    setPrompt(t, "OPENROUTER_CHAT_PROMPT", "Configured chat instructions.");
+    const clearTimer = t.mock.method(global, "clearTimeout");
+    t.mock.method(global, "fetch", async () => {
+      if (failure === "network") throw new Error("Network unavailable");
+      return {
+        ok: failure !== "http",
+        status: 503,
+        async text() { return "Service unavailable"; },
+        async json() {
+          if (failure === "invalid-json") throw new SyntaxError("Invalid response JSON");
+          return { choices: [{ message: { content: "  " } }] };
+        },
+      };
+    });
+
+    const result = await createOpenRouterAiProvider("ChatGPT", null).generateReply([
+      { author: "player", text: "where are you from?" },
+    ]);
+
+    assert.equal(result.text, "");
+    assert.equal(result.failed, true);
+    assert.equal(result.source, "openrouter");
+    assert.equal(result.model, "openai/gpt-5.4-mini");
+    assert.match(result.error, /Network unavailable|OpenRouter 503|unusable reply|Invalid response JSON/);
+    assert.equal(clearTimer.mock.calls.length, 1);
+  });
+}
+
+test("a timed-out request reports failure and clears its timer", async (t) => {
+  setPrompt(t, "OPENROUTER_CHAT_PROMPT", "Configured chat instructions.");
+  const timer = {};
+  t.mock.method(global, "setTimeout", (callback) => { queueMicrotask(callback); return timer; });
+  const clearTimer = t.mock.method(global, "clearTimeout", () => {});
+  t.mock.method(global, "fetch", async (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new Error("Request timed out")), { once: true });
+  }));
+
+  const result = await createOpenRouterAiProvider("ChatGPT", null).generateReply([]);
+
+  assert.equal(result.text, "");
+  assert.equal(result.failed, true);
+  assert.equal(result.error, "Request timed out");
+  assert.equal(clearTimer.mock.calls[0].arguments[0], timer);
 });
 
 function setPrompt(t, name, value) {

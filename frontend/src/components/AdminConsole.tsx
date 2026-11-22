@@ -528,7 +528,7 @@ function AdminRoomCard({ room }: { room: AdminRoom }) {
               {message.ai && (
                 <div className={`aiTranscriptMeta ${message.ai.failed ? "failed" : ""}`}>
                   <span>{formatAiSource(message.ai.source)}</span>
-                  <span>{message.ai.failed ? "Fallback after failure" : "Delivered"}</span>
+                  <span>{message.ai.failed ? "Failed" : "Delivered"}</span>
                   <span>{formatMs(message.ai.typingDelayMs)} delay</span>
                   {message.ai.error && <span>{message.ai.error}</span>}
                 </div>

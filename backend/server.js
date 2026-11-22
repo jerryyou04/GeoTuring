@@ -1357,13 +1357,28 @@ function startTurn(session, owner) {
   if (owner === "partner" && session.mode === "ai") {
     sendAiTurnMessage(session.id).catch((error) => {
       console.warn(`AI turn failed for session ${session.id}: ${error.message}`);
-      markAiResponseStatus(session, {
-        state: "failed",
-        error: error.message,
-      });
+      handleAiReplyFailure(session, { error: error.message });
     });
     return;
   }
+}
+
+function handleAiReplyFailure(session, failure = {}) {
+  if (sessions.get(session.id) !== session || session.mode !== "ai" || session.ended || session.chatLocked || session.turnOwner !== "partner") {
+    return;
+  }
+
+  markAiResponseStatus(session, {
+    state: "failed",
+    failed: true,
+    responseText: null,
+    source: failure.source || "openrouter",
+    model: failure.model || session.participant.adapter.model || null,
+    error: failure.error || "AI provider returned no response.",
+  });
+  session.ended = true;
+  emitSessionEnded(session, "The AI service is temporarily unavailable. This round was not scored. Please try again.");
+  deleteSession(session.id);
 }
 
 async function sendAiTurnMessage(sessionId) {
@@ -1439,24 +1454,18 @@ async function sendAiTurnMessage(sessionId) {
       sessionId: session.id,
     }));
   } catch (error) {
-    markAiResponseStatus(session, {
-      state: "failed",
-      error: error.message,
-    });
+    handleAiReplyFailure(session, { error: error.message });
     return;
   }
 
   const currentSession = sessions.get(sessionId);
 
-  if (!currentSession || currentSession !== session || session.ended || session.turnOwner !== "partner") {
+  if (!currentSession || currentSession !== session || session.ended || session.chatLocked || session.turnOwner !== "partner") {
     return;
   }
 
-  if (!replyResult.text) {
-    markAiResponseStatus(session, {
-      state: "failed",
-      error: "AI generated an empty response.",
-    });
+  if (replyResult.failed || !replyResult.text.trim()) {
+    handleAiReplyFailure(session, replyResult);
     return;
   }
 

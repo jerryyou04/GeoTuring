@@ -12,8 +12,8 @@ in the hosting service's environment, with credentials on the backend only.
 | `FRONTEND_URL` | Allowed CORS origin, such as `http://localhost:5173` locally or the deployed frontend URL. Set it explicitly in production. |
 | `DATABASE_URL` | PostgreSQL connection string for completed game history. Without it, history persistence is disabled. |
 | `REDIS_URL` | Redis connection string for leaderboard statistics and display names. Configure both PostgreSQL and Redis for the complete production history/leaderboard flow. |
-| `OPENROUTER_API_KEY` | Enables live AI replies. Without it, opponents use canned development replies. |
-| `OPENROUTER_CHAT_PROMPT` | Complete chat system prompt, configured privately on the backend. Missing or blank values use canned fallback replies without calling OpenRouter. |
+| `OPENROUTER_API_KEY` | Required for AI conversations and final guesses. Missing or blank values fail without calling OpenRouter; human-versus-human rounds remain available. |
+| `OPENROUTER_CHAT_PROMPT` | Complete chat system prompt, configured privately on the backend. Missing or blank values fail without calling OpenRouter and end the affected round without scoring. |
 | `OPENROUTER_GUESS_PROMPT` | Complete final-guess system prompt. Missing or blank values make the AI's final guess unavailable without calling OpenRouter. |
 | `AI_HOSTILE_TRIGGERS` | Private JSON array of keywords/phrases used by backend hostility detection. Missing, blank, or `[]` disables keyword detection. Invalid JSON or entries prevent startup. |
 | `ADMIN_URL` | Optional host-chosen admin URL segment. No leading slash; use 1–128 letters, numbers, hyphens, or underscores. `history` and `leaderboard` are reserved. |
@@ -52,7 +52,10 @@ The chat prompt supports these optional template markers:
 - `{{#REPLY}}text{{/REPLY}}`: include this text only when replying to prior messages.
 
 Include the clock and persona markers to retain the game's per-match context.
-Other template markers are rejected and use the existing local fallback.
+Other template markers are rejected. Failed chat requests return no substitute
+reply and end the affected round immediately with an unavailable message and no
+score. Request timers are cleared on success and failure. An AI final-guess
+failure is shown as unavailable while the player's completed round remains scored.
 The final-guess prompt is passed through verbatim. It must request JSON with
 `verdict` (`human` or `ai`), `latitude`, `longitude`, `model` (one of the four
 in-game families, or null), and `reason`. The server supplies the labelled
@@ -68,8 +71,8 @@ production list in private configuration. A neutral format example is
 
 The backend reads this list at startup, trims and lowercases entries, and checks
 whether the lowercased message contains any entry. Substring matching is
-preserved. Both AI early-lock decisions and the local fallback provider use the
-same detection function. The list is not sent to OpenRouter or the browser.
+preserved. AI early-lock decisions use this detection function. The list is not
+sent to OpenRouter or the browser.
 
 Missing, blank, or `[]` values disable keyword detection while normal AI locking
 continues. Malformed JSON, non-array values, and entries that are not nonempty
@@ -167,8 +170,9 @@ retry deduplication.
 
 ## Local demo storage
 
-`npm run dev:mock` substitutes synthetic history and leaderboard data, and disables
-OpenRouter calls in that process. Its ignored data file is
+`npm run dev:mock` substitutes synthetic history and leaderboard data. AI
+conversations use OpenRouter with the same credentials and prompts as the regular
+backend; no canned AI provider is installed. Its ignored data file is
 `backend/.local/mock-data.json`. Remove it while the server is stopped to reset
 the samples. Regular `npm start` and `npm run dev` use the production storage
 implementations. Mock mode refuses to run in production or on Railway.

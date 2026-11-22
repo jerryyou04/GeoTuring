@@ -7,7 +7,6 @@ const {
   createLocationProfile,
   pickWeighted,
 } = require("../ai/common");
-const { createMockAiProvider } = require("../ai/mockProvider");
 
 test("location pools are large, valid, unique, and weighted toward North America", () => {
   const totalWeight = LOCATION_POOLS.reduce((sum, pool) => sum + pool.weight, 0);
@@ -110,33 +109,4 @@ test("generated personas keep one assigned place and a matching disclosure style
   assert.match(instructions, /Keep this same location for the entire match\./);
   assert.match(instructions, /answer naturally using Vancouver or Canada/);
   assert.doesNotMatch(instructions, /undefined|null|\[object Object\]/);
-});
-
-test("mock replies use the assigned location instead of inventing another one", async () => {
-  const persona = {
-    age: 24,
-    humor: "dry",
-    verbosity: "short",
-    emojiUsage: "never",
-    casing: "lowercase",
-    punctuation: "casual",
-    confidence: "medium",
-    curiosity: "medium",
-    suspicion: "medium",
-    location: {
-      poolId: "europe",
-      worldRegion: "europe",
-      city: "Dublin",
-      country: "Ireland",
-      timeZone: "Europe/Dublin",
-    },
-    locationDisclosure: "direct",
-  };
-  const provider = createMockAiProvider("ChatGPT", persona);
-  const result = await provider.generateReply([
-    { author: "player", text: "where are you from?" },
-  ]);
-
-  assert.match(result.text, /dublin/i);
-  assert.doesNotMatch(result.text, /antarctica|mars/i);
 });

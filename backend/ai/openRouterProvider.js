@@ -3,7 +3,6 @@ const {
   buildPersonaInstructions,
   hasChatMessages,
 } = require("./common");
-const { createMockAiProvider } = require("./mockProvider");
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_TIMEOUT_MS = Number(process.env.OPENROUTER_TIMEOUT_MS || 9000);
@@ -32,20 +31,21 @@ const DEFAULT_OPENROUTER_MODELS = {
 
 function createOpenRouterAiProvider(modelFamily, persona) {
   const model = getModelSlug(modelFamily);
-  const fallback = createMockAiProvider(modelFamily, persona);
 
   return {
     modelFamily,
     model,
     async generateReply(messages, options = {}) {
+      let timeout;
       try {
+        const headers = buildOpenRouterHeaders();
         const requestMessages = buildOpenRouterMessages(messages, persona);
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+        timeout = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
         const response = await fetch(OPENROUTER_CHAT_URL, {
           method: "POST",
           signal: controller.signal,
-          headers: buildOpenRouterHeaders(),
+          headers,
           body: JSON.stringify({
             model,
             messages: requestMessages,
@@ -58,8 +58,6 @@ function createOpenRouterAiProvider(modelFamily, persona) {
             session_id: options.sessionId || undefined,
           }),
         });
-        clearTimeout(timeout);
-
         if (!response.ok) {
           const details = await response.text();
           throw new Error(`OpenRouter ${response.status}: ${details.slice(0, 240)}`);
@@ -70,8 +68,7 @@ function createOpenRouterAiProvider(modelFamily, persona) {
         const text = normalizeAiReply(content);
 
         if (!text) {
-          console.warn(`OpenRouter returned an unusable reply for ${modelFamily} (${model}); using local fallback.`);
-          return buildFallbackReply(await fallback.generateReply(messages), model, "OpenRouter returned an unusable reply.");
+          throw new Error("OpenRouter returned an unusable reply.");
         }
 
         return buildAiReplyResult(text, {
@@ -82,12 +79,19 @@ function createOpenRouterAiProvider(modelFamily, persona) {
         });
       } catch (error) {
         console.warn(`OpenRouter reply failed for ${modelFamily}: ${error.message}`);
-        return buildFallbackReply(await fallback.generateReply(messages), model, error.message);
+        return buildAiReplyResult("", {
+          source: "openrouter",
+          failed: true,
+          error: error.message,
+          model,
+        });
+      } finally {
+        clearTimeout(timeout);
       }
     },
     // A separate, out-of-character analytical call: after the chat, the AI judges
     // whether the OTHER participant was human or AI. Returns raw structured fields
-    // (the server sanitizes them). Fails gracefully — no mock fallback. Mirrors the
+    // (the server sanitizes them). Fails gracefully. Mirrors the
     // reliable chat call: no response_format, reasoning off by default. Retries once
     // since it runs during the generous final-guess window.
     async generateGuess(messages) {
@@ -104,14 +108,16 @@ function createOpenRouterAiProvider(modelFamily, persona) {
 }
 
 async function attemptGuess(modelFamily, model, messages) {
+  let timeout;
   try {
+    const headers = buildOpenRouterHeaders();
     const requestMessages = buildGuessMessages(messages);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), OPENROUTER_GUESS_TIMEOUT_MS);
+    timeout = setTimeout(() => controller.abort(), OPENROUTER_GUESS_TIMEOUT_MS);
     const response = await fetch(OPENROUTER_CHAT_URL, {
       method: "POST",
       signal: controller.signal,
-      headers: buildOpenRouterHeaders(),
+      headers,
       body: JSON.stringify({
         model,
         messages: requestMessages,
@@ -121,8 +127,6 @@ async function attemptGuess(modelFamily, model, messages) {
         top_p: 0.9,
       }),
     });
-    clearTimeout(timeout);
-
     if (!response.ok) {
       const details = await response.text();
       throw new Error(`OpenRouter ${response.status}: ${details.slice(0, 240)}`);
@@ -152,6 +156,8 @@ async function attemptGuess(modelFamily, model, messages) {
   } catch (error) {
     console.warn(`OpenRouter guess failed for ${modelFamily} (${model}): ${error.message}`);
     return { failed: true, source: "openrouter", model, error: error.message };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -215,16 +221,11 @@ function buildGuessReasoningConfig() {
   return { reasoning: { effort } };
 }
 
-function buildFallbackReply(reply, model, error) {
-  return buildAiReplyResult(reply, {
-    source: "local_fallback",
-    failed: true,
-    error,
-    model,
-  });
-}
-
 function buildOpenRouterHeaders() {
+  if (!process.env.OPENROUTER_API_KEY?.trim()) {
+    throw new Error("OPENROUTER_API_KEY is not configured.");
+  }
+
   const headers = {
     Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
     "Content-Type": "application/json",

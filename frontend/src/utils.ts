@@ -169,8 +169,7 @@ export function formatAiSource(value: string | null) {
 
   const labels: Record<string, string> = {
     openrouter: "OpenRouter",
-    local: "Local mock",
-    local_fallback: "Local fallback",
+    local: "Server-generated",
   };
 
   return labels[value] || value;

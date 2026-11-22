@@ -19,7 +19,6 @@ for (const [name, implementation] of Object.entries({ db: local.db, redis: local
   replacement.exports = implementation;
   require.cache[filename] = replacement;
 }
-process.env.OPENROUTER_API_KEY = "";
 console.log("LOCAL MOCK DATA: synthetic History and Leaderboard are enabled.");
 console.log(`Local data file: ${filePath}`);
 require("../server");
