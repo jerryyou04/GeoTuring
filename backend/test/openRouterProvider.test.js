@@ -15,6 +15,7 @@ const UTC_WEEKDAYS = [
 test("OpenRouter chat prompts include an internally consistent authoritative UTC clock", async (t) => {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
+  setPrompt(t, "OPENROUTER_CHAT_PROMPT", "Private chat instructions. {{CLOCK_CONTEXT}} {{PERSONA_INSTRUCTIONS}} {{#OPENING}}Start the conversation.{{/OPENING}}{{#REPLY}}Reply to the conversation.{{/REPLY}}");
   let requestBody = null;
 
   t.after(() => {
@@ -95,7 +96,6 @@ test("OpenRouter chat prompts include an internally consistent authoritative UTC
   assert.match(systemPrompt, new RegExp(`day of week=${UTC_WEEKDAYS[timestamp.getUTCDay()]};`));
   assert.match(systemPrompt, new RegExp(`date=${isoTimestamp.slice(0, 10)};`));
   assert.match(systemPrompt, new RegExp(`time=${isoTimestamp.slice(11, 19)} UTC;`));
-  assert.match(systemPrompt, /background context for the current date and time/);
   assert.match(systemPrompt, /You are from and currently chatting from Toronto, Canada\./);
   assert.match(systemPrompt, /IANA time zone: America\/Toronto\./);
   assert.match(
@@ -111,28 +111,14 @@ test("OpenRouter chat prompts include an internally consistent authoritative UTC
     systemPrompt,
     new RegExp(`time=${torontoClock.hour}:${torontoClock.minute}:${torontoClock.second}\\.`),
   );
-  assert.match(systemPrompt, /assigned-location clock above already includes daylight-saving rules/);
-  assert.match(systemPrompt, /High-priority hostility rule:/);
-  assert.match(
-    systemPrompt,
-    /response MUST contain at least one exact word from this harsh-profanity list/,
-  );
-  assert.match(
-    systemPrompt,
-    /\["fuck", "fucking", "shit", "bullshit", "asshole", "dumbass", "bitch", "bastard"\]/,
-  );
-  assert.match(systemPrompt, /Use the chosen word naturally in a sharp insult or dismissal/);
-  assert.match(systemPrompt, /Do not soften words like fuck or shit into mild language/);
-  assert.match(systemPrompt, /do not give a profanity-free response/);
-  assert.match(systemPrompt, /Vary the delivery naturally: the profane response can be a funny clapback/);
-  assert.match(systemPrompt, /Keep the response concise, confident, and genuinely cutting/);
-  assert.doesNotMatch(systemPrompt, /push back and insult them right back/);
-  assert.doesNotMatch(systemPrompt, /Sometimes just give a specific believable place/);
-  assert.doesNotMatch(systemPrompt, /leaning casual gen z internet style/);
-  assert.doesNotMatch(systemPrompt, /When asked for the current date or time/);
+  assert.match(systemPrompt, /^Private chat instructions\./);
+  assert.match(systemPrompt, /Reply to the conversation\./);
+  assert.doesNotMatch(systemPrompt, /Start the conversation\.|\{\{/);
 });
 
-test("OpenRouter guess prompts do not treat casual English as North American evidence", async (t) => {
+test("OpenRouter uses the configured final-guess prompt verbatim and supplies the transcript", async (t) => {
+  const configuredPrompt = "Private final-guess instructions.\nReturn a JSON verdict with a reason.";
+  setPrompt(t, "OPENROUTER_GUESS_PROMPT", configuredPrompt);
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
   let requestBody = null;
@@ -185,15 +171,94 @@ test("OpenRouter guess prompts do not treat casual English as North American evi
 
   const systemPrompt = requestBody.messages[0].content;
 
-  assert.match(systemPrompt, /Treat casual English as geographically neutral\./);
-  assert.match(systemPrompt, /do not by themselves point to Canada or the United States/);
-  assert.match(systemPrompt, /Europe, Asia, Africa, Latin America, Oceania/);
-  assert.match(systemPrompt, /Give even modest credible evidence outside Canada or the United States real weight\./);
-  assert.match(systemPrompt, /follow that evidence instead of pulling the guess back toward North America/);
-  assert.match(systemPrompt, /only when the transcript contains no meaningful geographic signal at all/);
-  assert.match(systemPrompt, /Toronto, Vancouver, California, New York, Texas, Florida/);
-  assert.doesNotMatch(systemPrompt, /randomly selected|fallback anchor|tie-break/i);
+  assert.equal(systemPrompt, configuredPrompt);
+  assert.match(requestBody.messages[1].content, /THEM: hey, not much honestly/);
+  assert.match(requestBody.messages[1].content, /YOU: same here/);
+  assert.equal(result.reason, "The brief casual replies do not provide a reliable geographic clue.");
 });
+
+test("configured chat prompts control opening and reply instructions", async (t) => {
+  setPrompt(t, "OPENROUTER_CHAT_PROMPT", "Custom text.\n{{#OPENING}}Opening only.{{/OPENING}}{{#REPLY}}Reply only.{{/REPLY}}");
+  const requests = [];
+  t.mock.method(global, "fetch", async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return { ok: true, async json() { return { choices: [{ message: { content: "hello" } }] }; } };
+  });
+  const provider = createOpenRouterAiProvider("ChatGPT", null);
+
+  await provider.generateReply([{ author: "system", text: "Match found" }]);
+  await provider.generateReply([
+    { author: "player", text: "hi" },
+    { author: "partner", text: "hello" },
+    { author: "player", text: "how are you?" },
+  ]);
+
+  assert.equal(requests[0].messages[0].content, "Custom text.\nOpening only.");
+  assert.equal(requests[1].messages[0].content, "Custom text.\nReply only.");
+  assert.deepEqual(requests[1].messages.slice(1), [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "hello" },
+    { role: "user", content: "how are you?" },
+  ]);
+});
+
+test("chat prompt values pass through verbatim without template markers", async (t) => {
+  const prompt = 'Private instructions.\nPreserve $& and "quoted text" exactly.';
+  setPrompt(t, "OPENROUTER_CHAT_PROMPT", prompt);
+  let requestBody;
+  t.mock.method(global, "fetch", async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return { ok: true, async json() { return { choices: [{ message: { content: "hello" } }] }; } };
+  });
+
+  await createOpenRouterAiProvider("ChatGPT", null).generateReply([]);
+
+  assert.equal(requestBody.messages[0].content, prompt);
+});
+
+for (const prompt of [undefined, "", " \n ", "Unrecognized {{UNKNOWN_CONTEXT}}", "{{#OPENING}}Unclosed block"]) {
+  test(`missing, blank, or invalid chat configuration uses fallback (${JSON.stringify(prompt)})`, async (t) => {
+    setPrompt(t, "OPENROUTER_CHAT_PROMPT", prompt);
+    const fetchMock = t.mock.method(global, "fetch", async () => {
+      throw new Error("OpenRouter must not be called with an invalid prompt");
+    });
+
+    const result = await createOpenRouterAiProvider("ChatGPT", null).generateReply([]);
+
+    assert.ok(result.text);
+    assert.match(result.error, /OPENROUTER_CHAT_PROMPT/);
+    assert.equal(fetchMock.mock.calls.length, 0);
+  });
+}
+
+test("missing final-guess configuration makes the guess unavailable without an API call", async (t) => {
+  setPrompt(t, "OPENROUTER_GUESS_PROMPT", undefined);
+  const fetchMock = t.mock.method(global, "fetch", async () => {
+    throw new Error("OpenRouter must not be called without a guess prompt");
+  });
+
+  const result = await createOpenRouterAiProvider("ChatGPT", null).generateGuess([]);
+
+  assert.equal(result.failed, true);
+  assert.equal(result.error, "OPENROUTER_GUESS_PROMPT is not configured.");
+  assert.equal(fetchMock.mock.calls.length, 0);
+});
+
+function setPrompt(t, name, value) {
+  const original = process.env[name];
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = original;
+    }
+  });
+}
 
 function zonedClockParts(date, timeZone) {
   return Object.fromEntries(

@@ -13,6 +13,8 @@ in the hosting service's environment, with credentials on the backend only.
 | `DATABASE_URL` | PostgreSQL connection string for completed game history. Without it, history persistence is disabled. |
 | `REDIS_URL` | Redis connection string for leaderboard statistics and display names. Configure both PostgreSQL and Redis for the complete production history/leaderboard flow. |
 | `OPENROUTER_API_KEY` | Enables live AI replies. Without it, opponents use canned development replies. |
+| `OPENROUTER_CHAT_PROMPT` | Complete chat system prompt, configured privately on the backend. Missing or blank values use canned fallback replies without calling OpenRouter. |
+| `OPENROUTER_GUESS_PROMPT` | Complete final-guess system prompt. Missing or blank values make the AI's final guess unavailable without calling OpenRouter. |
 | `ADMIN_URL` | Optional host-chosen admin URL segment. No leading slash; use 1–128 letters, numbers, hyphens, or underscores. `history` and `leaderboard` are reserved. |
 | `ADMIN_PASSWORD` | Admin login password. Admin routes are registered only when both this and `ADMIN_URL` are nonempty. |
 | `GEOAPIFY_API_KEY` | Optional managed reverse-geocoding provider; otherwise the backend uses its rate-limited Nominatim fallback. |
@@ -31,6 +33,29 @@ in the hosting service's environment, with credentials on the backend only.
   provider reasoning options.
 - `AI_OPPONENT_GUESS_ENABLED`: set to `false` to disable the AI's final guess.
 - `AI_TYPING_WPM` and `AI_TYPING_WPM_STDDEV`: simulated typing-speed tuning.
+
+### Private AI prompts
+
+Set `OPENROUTER_CHAT_PROMPT` and `OPENROUTER_GUESS_PROMPT` on the Railway backend
+service before deploying code that uses them. Paste the complete prompt text as
+each variable's value; multiline text is supported. For local development, use
+quoted multiline values in the ignored backend `.env` file. Prompt text belongs
+on the backend and must not be added to frontend variables or committed files.
+
+The chat prompt supports these optional template markers:
+
+- `{{CLOCK_CONTEXT}}`: current server UTC and assigned-location clock context.
+- `{{PERSONA_INSTRUCTIONS}}`: the generated personality and location instructions
+  for this match.
+- `{{#OPENING}}text{{/OPENING}}`: include this text only when the AI starts a chat.
+- `{{#REPLY}}text{{/REPLY}}`: include this text only when replying to prior messages.
+
+Include the clock and persona markers to retain the game's per-match context.
+Other template markers are rejected and use the existing local fallback.
+The final-guess prompt is passed through verbatim. It must request JSON with
+`verdict` (`human` or `ai`), `latitude`, `longitude`, `model` (one of the four
+in-game families, or null), and `reason`. The server supplies the labelled
+conversation transcript separately.
 
 ### Reverse-geocoding options
 
@@ -75,8 +100,8 @@ The hosted app uses `geoturing.com` for the frontend and `api.geoturing.com` for
 the backend. For another deployment, configure the frontend API/socket URLs and
 backend CORS origin to match its domains.
 
-Set `FRONTEND_URL` on the backend. Add `OPENROUTER_API_KEY`, `DATABASE_URL`, and
-`REDIS_URL` for the full production feature set. For higher geocoding volume,
+Set `FRONTEND_URL` on the backend. Add `OPENROUTER_API_KEY`, both prompt variables,
+`DATABASE_URL`, and `REDIS_URL` for the full production feature set. For higher geocoding volume,
 configure a provider and quota appropriate to that deployment.
 
 Active sessions, timers, and matchmaking queues are in process memory. Run one

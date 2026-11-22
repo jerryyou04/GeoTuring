@@ -88,7 +88,8 @@ local player, and canned AI replies. Local changes persist in the ignored
 `backend/.local/mock-data.json` file; stop the backend and delete that file to reset
 it. Demo mode refuses to run in production or on Railway.
 
-For the regular backend, use `npm run dev` instead. Add `OPENROUTER_API_KEY` for
+For the regular backend, use `npm run dev` instead. Add `OPENROUTER_API_KEY`,
+`OPENROUTER_CHAT_PROMPT`, and `OPENROUTER_GUESS_PROMPT` for
 live AI opponents, and `DATABASE_URL` plus `REDIS_URL` for persistent history and
 leaderboard statistics. See [configuration](docs/configuration.md) for all options.
 
